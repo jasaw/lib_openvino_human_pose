@@ -3,7 +3,7 @@ RM = rm -rf
 CC ?= $(CROSS)gcc
 SRCDIR=.
 
-CFLAGS += -I$(SRCDIR) -I$(SRCDIR)/../lib_openvino_human_pose
+CFLAGS += -I$(SRCDIR) -I$(SRCDIR)/..
 #CFLAGS += -Wl,-rpath -Wl,$(DETECTION_LIB_PATH)
 LDFLAGS = -ldl -ljpeg
 

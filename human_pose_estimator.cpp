@@ -121,9 +121,12 @@ void HumanPoseEstimator::estimateAsync(const cv::Mat& image) {
 
 
 std::vector<HumanPose> HumanPoseEstimator::getResult(void) {
+    std::cout << "get blob pafsBlobName" << std::endl;
     InferenceEngine::Blob::Ptr pafsBlob = request.GetBlob(pafsBlobName);
+    std::cout << "get blob heatmaps" << std::endl;
     InferenceEngine::Blob::Ptr heatMapsBlob = request.GetBlob(heatmapsBlobName);
     //CV_Assert(heatMapsBlob->getTensorDesc().getDims()[1] == keypointsNumber + 1);
+    std::cout << "get tensor desc heatmaps" << std::endl;
     InferenceEngine::SizeVector heatMapDims =
             heatMapsBlob->getTensorDesc().getDims();
     std::vector<HumanPose> poses = postprocess(

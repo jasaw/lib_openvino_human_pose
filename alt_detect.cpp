@@ -10,6 +10,10 @@
 #include <stdio.h>
 #include <string.h>
 #include <vector>
+#include <iostream>
+#include <fstream>
+#include <algorithm>
+#include <sys/stat.h>
 #include <opencv2/opencv.hpp>
 #include "human_pose_estimator.hpp"
 #include "alt_detect.h"
@@ -102,27 +106,11 @@ static cv::Mat YuvToBgr(unsigned char *pBuffer, int width, int height)
             *output++=r;
         }
     }
-
-    //for (int i = 0; i < uSize; i++)
-    //{
-    //    for(int j = 0; j < 4; j++)
-    //    {
-    //        y  = pY[i*4+j];
-    //        cb = pU[i];
-    //        cr = pV[i];
-    //        // ITU-R standard
-    //        b = cv::saturate_cast<unsigned char>(y+1.772*(cb-128));
-    //        g = cv::saturate_cast<unsigned char>(y-0.344*(cb-128)-0.714*(cr-128));
-    //        r = cv::saturate_cast<unsigned char>(y+1.402*(cr-128));
-    //        *output++=b;
-    //        *output++=g;
-    //        *output++=r;
-    //    }
-    //}
     return result;
 }
 
 
+#if 0
 static void debug_write_raw_image(cv::Mat &img)
 {
     cv::Size imageSize = img.size();
@@ -140,28 +128,17 @@ static void debug_write_raw_image(cv::Mat &img)
     catch (std::runtime_error& ex) {
         fprintf(stderr, "Exception converting image to PNG format: %s\n", ex.what());
     }
-
-
-    //unsigned long long len = imageSize.width * imageSize.height * 3; // assume BGR format
-    //FILE* pFile;
-    //pFile = fopen("/tmp/libopenvinohumanpose.raw", "wb");
-    //for (unsigned long long j = 0; j < len; ++j){
-    //    fwrite(img.data, 1, len, pFile);
-    //}
-    //fclose(pFile);
 }
+#endif
 
 
-// image in YUV format
+// image in YUV420 format
 // return 0 on success
 int alt_detect_process(unsigned char *image, int width, int height)
 {
     cv::Mat img = YuvToBgr(image, width, height);
 
-
-    debug_write_raw_image(img);
-    return 0; // DEBUG: do nothing for now
-
+    //debug_write_raw_image(img);
 
     estimator->estimateAsync(img);
     return 0;
@@ -170,7 +147,9 @@ int alt_detect_process(unsigned char *image, int width, int height)
 
 int alt_detect_result_ready(void)
 {
-    return (int)estimator->resultIsReady();
+    if (estimator->resultIsReady())
+        return 1;
+    return 0;
 }
 
 
@@ -181,7 +160,7 @@ int alt_detect_get_result(alt_detect_result_t *alt_detect_result)
         return 0;
 
     memset(alt_detect_result, 0, sizeof(alt_detect_result_t));
-    if (alt_detect_result_ready()) {
+    if (estimator->resultIsReady()) {
         std::vector<human_pose_estimation::HumanPose> poses = estimator->getResult();
         humanPoseToLines(poses, alt_detect_result);
     }
@@ -216,28 +195,52 @@ void alt_detect_free_result(alt_detect_result_t *alt_detect_result)
 
 int alt_detect_init(const char *config_file)
 {
+    std::string _modelXmlPath("human-pose-estimation-0001.xml");
+    std::string _modelBinPath("human-pose-estimation-0001.bin");
+    std::string _targetDeviceName("MYRIAD");
+    struct stat st;
+
     if (estimator)
         return -1;
 
-    // TODO: read model XML and BIN and target device from config file
+    // read model XML and BIN and target device from config file
+    std::ifstream cFile(config_file);
+    if (cFile.is_open()) {
+        std::string line;
+        while (getline(cFile, line)) {
+            line.erase(std::remove_if(line.begin(), line.end(), isspace),
+                                 line.end());
+            if(line[0] == '#' || line.empty())
+                continue;
+            auto delimiterPos = line.find("=");
+            std::string name = line.substr(0, delimiterPos);
+            std::string value = line.substr(delimiterPos + 1);
+            //std::cout << name << " " << value << '\n';
+            if (name == "MODEL_XML") {
+                _modelXmlPath = value;
+            } else if (name == "MODEL_BIN") {
+                _modelBinPath = value;
+            } else if (name == "TARGET_DEVICE") {
+                _targetDeviceName = value;
+            }
+        }
 
-    const char *modelXmlPath = getenv("OPENVINO_MODEL_XML");
-    const char *modelBinPath = getenv("OPENVINO_MODEL_BIN");
-    const char *targetDeviceName = getenv("OPENVINO_TARGET_DEVICE");
-    if (!modelXmlPath) {
-        std::cerr << "Error: OPENVINO_MODEL_XML environment variable not set." << std::endl;
+    } else {
+        std::cerr << "Couldn't open " << config_file << " config file" << std::endl;
+    }
+    std::cout << "loaded config file "<< config_file << std::endl;
+
+    if (stat(_modelXmlPath.c_str(), &st) != 0)
+    {
+        std::cerr << "Error: " << _modelXmlPath << " does not exist" << std::endl;
         return -1;
     }
-    if (!modelBinPath) {
-        std::cerr << "Error: OPENVINO_MODEL_BIN environment variable not set." << std::endl;
+    if (stat(_modelBinPath.c_str(), &st) != 0)
+    {
+        std::cerr << "Error: " << _modelBinPath << " does not exist" << std::endl;
         return -1;
     }
-    if (!targetDeviceName)
-        targetDeviceName = "MYRIAD";
 
-    const std::string _modelXmlPath(modelXmlPath);
-    const std::string _modelBinPath(modelBinPath);
-    const std::string _targetDeviceName(targetDeviceName);
     estimator = new human_pose_estimation::HumanPoseEstimator(_modelXmlPath, _modelBinPath, _targetDeviceName);
     return 0;
 }

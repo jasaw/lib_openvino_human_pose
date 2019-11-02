@@ -23,30 +23,10 @@
 
 
 #define CLIP(X) ( (X) > 255 ? 255 : (X) < 0 ? 0 : X)
-
-//// RGB -> YUV
-//#define RGB2Y(R, G, B) CLIP(( (  66 * (R) + 129 * (G) +  25 * (B) + 128) >> 8) +  16)
-//#define RGB2U(R, G, B) CLIP(( ( -38 * (R) -  74 * (G) + 112 * (B) + 128) >> 8) + 128)
-//#define RGB2V(R, G, B) CLIP(( ( 112 * (R) -  94 * (G) -  18 * (B) + 128) >> 8) + 128)
-//
-//// YUV -> RGB
-//#define C(Y) ( (Y) - 16  )
-//#define D(U) ( (U) - 128 )
-//#define E(V) ( (V) - 128 )
-//
-//#define YUV2R(Y, U, V) CLIP(( 298 * C(Y)              + 409 * E(V) + 128) >> 8)
-//#define YUV2G(Y, U, V) CLIP(( 298 * C(Y) - 100 * D(U) - 208 * E(V) + 128) >> 8)
-//#define YUV2B(Y, U, V) CLIP(( 298 * C(Y) + 516 * D(U)              + 128) >> 8)
-//
 // RGB -> YCbCr
 #define CRGB2Y(R, G, B) CLIP((19595 * R + 38470 * G + 7471 * B ) >> 16)
 #define CRGB2Cb(R, G, B) CLIP((36962 * (B - CLIP((19595 * R + 38470 * G + 7471 * B ) >> 16) ) >> 16) + 128)
 #define CRGB2Cr(R, G, B) CLIP((46727 * (R - CLIP((19595 * R + 38470 * G + 7471 * B ) >> 16) ) >> 16) + 128)
-
-//// YCbCr -> RGB
-//#define CYCbCr2R(Y, Cb, Cr) CLIP( Y + ( 91881 * Cr >> 16 ) - 179 )
-//#define CYCbCr2G(Y, Cb, Cr) CLIP( Y - (( 22544 * Cb + 46793 * Cr ) >> 16) + 135)
-//#define CYCbCr2B(Y, Cb, Cr) CLIP( Y + (116129 * Cb >> 16 ) - 226 )
 
 
 
@@ -283,77 +263,6 @@ int read_JPEG_file (const char * filename,
 
 unsigned char *rgb2yuv(unsigned char *image, int width, int height, int numChannels)
 {
-    //int output_size = width * height + width * height / 2;
-    //unsigned char *output = malloc(output_size);
-    //if (output == NULL) {
-    //    fprintf(stderr, "Error: failed to allocate memory for RGB to YUV conversion\n");
-    //    return NULL;
-    //}
-    //int yuv444_output_size = width * height * 3;
-    //unsigned char *yuv444_output = malloc(yuv444_output_size);
-    //if (yuv444_output == NULL) {
-    //    fprintf(stderr, "Error: failed to allocate memory for RGB to YUV conversion\n");
-    //    free(output);
-    //    return NULL;
-    //}
-    //
-    //for (int j = 0; j < height; j++) {
-    //    for (int i = 0; i < width; i++) {
-    //        int r = image[(i + j * width) * numChannels] ;
-    //        int g = image[(i + j * width) * numChannels + 1] ;
-    //        int b = image[(i + j * width) * numChannels + 2] ;
-    //        yuv444_output[(i + j * width) * 3] = CRGB2Y(r,g,b);
-    //        yuv444_output[(i + j * width) * 3 + 1] = CRGB2Cb(r,g,b);
-    //        yuv444_output[(i + j * width) * 3 + 2] = CRGB2Cr(r,g,b);
-    //    }
-    //}
-    //
-    //// YUV444 to YUV420 conversion
-    //int sum;
-    //int si0, si1, sj0, sj1;
-    //
-    //for (int j = 0; j < height; j++) {
-    //    for (int i = 0; i < width; i++) {
-    //        output[(i + j * width) * 3] = yuv444_output[(i + j * width) * 3] ;
-    //    }
-    //}
-    //
-    //for (int j = 0; j < height; j+=2) {
-    //    sj0 = j ;
-    //    sj1 = (j + 1 < height) ? j + 1 : j ;
-    //
-    //    for (int i = 0; i < width; i+=2) {
-    //        si0 = i ;
-    //        si1 = (i + 1 < width) ? i + 1 : i ;
-    //
-    //        sum =  yuv444_output[(si0 + sj0 * width) * 3 + 1] ;
-    //        sum += yuv444_output[(si1 + sj0 * width) * 3 + 1] ;
-    //        sum += yuv444_output[(si0 + sj1 * width) * 3 + 1] ;
-    //        sum += yuv444_output[(si1 + sj1 * width) * 3 + 1] ;
-    //        sum = CLIP(sum / 4) ;
-    //
-    //        output[(si0 + sj0 * width) * 3 + 1] = sum ;
-    //        output[(si1 + sj0 * width) * 3 + 1] = sum ;
-    //        output[(si0 + sj1 * width) * 3 + 1] = sum ;
-    //        output[(si1 + sj1 * width) * 3 + 1] = sum ;
-    //
-    //        sum =  yuv444_output[(si0 + sj0 * width) * 3 + 2] ;
-    //        sum += yuv444_output[(si1 + sj0 * width) * 3 + 2] ;
-    //        sum += yuv444_output[(si0 + sj1 * width) * 3 + 2] ;
-    //        sum += yuv444_output[(si1 + sj1 * width) * 3 + 2] ;
-    //        sum = CLIP(sum / 4) ;
-    //
-    //        output[(si0 + sj0 * width) * 3 + 2] = sum ;
-    //        output[(si1 + sj0 * width) * 3 + 2] = sum ;
-    //        output[(si0 + sj1 * width) * 3 + 2] = sum ;
-    //        output[(si1 + sj1 * width) * 3 + 2] = sum ;
-    //    }
-    //}
-    //
-    //free(yuv444_output);
-
-
-//#if 0
     int output_size = width * height + width * height / 2;
     unsigned char *output = malloc(output_size);
     if (output == NULL) {
@@ -379,75 +288,5 @@ unsigned char *rgb2yuv(unsigned char *image, int width, int height, int numChann
         }
     }
 
-
-    //int output_size = width * height + width * height / 2;
-    //unsigned char *output = malloc(output_size);
-    //if (output == NULL) {
-    //    fprintf(stderr, "Error: failed to allocate memory for RGB to YUV conversion\n");
-    //    return NULL;
-    //}
-    //
-    //int image_size = width * height;
-    //int upos = image_size;
-    //int vpos = upos + (upos >> 2);
-    ////int i = 0;
-    //
-    //for(int i = 0; i < image_size; ++i ) {
-    //    int r = image[numChannels * i];
-    //    int g = image[numChannels * i + 1];
-    //    int b = image[numChannels * i + 2];
-    //    output[i] = CRGB2Y(r,g,b);
-    //    //destination[i] = ( ( 66*r + 129*g + 25*b ) >> 8 ) + 16;
-    //    //if (!((i / width) % 2) && !(i % 2)) {
-    //    if ((!(i & 1)) && (!((i/width)&1))) {
-    //    //if (!(i % 4)) {
-    //        output[upos++] = CRGB2Cb(r,g,b);
-    //        output[vpos++] = CRGB2Cr(r,g,b);
-    //        //destination[upos++] = ( ( -38*r + -74*g + 112*b ) >> 8) + 128;
-    //        //destination[vpos++] = ( ( 112*r + -94*g + -18*b ) >> 8) + 128;
-    //    }
-    //}
-
-
-    //for( int line = 0; line < height; ++line )
-    //{
-    //    if( !(line % 2) )
-    //    {
-    //        for( int x = 0; x < width; x += 2 )
-    //        {
-    //            int r = image[numChannels * i];
-    //            int g = image[numChannels * i + 1];
-    //            int b = image[numChannels * i + 2];
-    //
-    //            //output[i++] = CLIP(((66*r + 129*g + 25*b) >> 8) + 16);
-    //            //output[upos++] = CLIP(((-38*r + -74*g + 112*b) >> 8) + 128);
-    //            //output[vpos++] = CLIP(((112*r + -94*g + -18*b) >> 8) + 128);
-    //            output[i++] = CRGB2Y(r,g,b);
-    //            output[upos++] = CRGB2Cb(r,g,b);
-    //            output[vpos++] = CRGB2Cr(r,g,b);
-    //
-    //            r = image[numChannels * i];
-    //            g = image[numChannels * i + 1];
-    //            b = image[numChannels * i + 2];
-    //
-    //            //output[i++] = CLIP(((66*r + 129*g + 25*b) >> 8) + 16);
-    //            output[i++] = CRGB2Y(r,g,b);
-    //        }
-    //    }
-    //    else
-    //    {
-    //        for( int x = 0; x < width; x += 1 )
-    //        {
-    //            int r = image[numChannels * i];
-    //            int g = image[numChannels * i + 1];
-    //            int b = image[numChannels * i + 2];
-    //
-    //            //output[i++] = CLIP(((66*r + 129*g + 25*b) >> 8) + 16);
-    //            output[i++] = CRGB2Y(r,g,b);
-    //        }
-    //    }
-    //}
-
-//#endif
     return output;
 }
