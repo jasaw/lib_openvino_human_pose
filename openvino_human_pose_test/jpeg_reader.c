@@ -22,13 +22,6 @@
 #include "jpeg_reader.h"
 
 
-#define CLIP(X) ( (X) > 255 ? 255 : (X) < 0 ? 0 : X)
-// RGB -> YCbCr
-#define CRGB2Y(R, G, B) CLIP((19595 * R + 38470 * G + 7471 * B ) >> 16)
-#define CRGB2Cb(R, G, B) CLIP((36962 * (B - CLIP((19595 * R + 38470 * G + 7471 * B ) >> 16) ) >> 16) + 128)
-#define CRGB2Cr(R, G, B) CLIP((46727 * (R - CLIP((19595 * R + 38470 * G + 7471 * B ) >> 16) ) >> 16) + 128)
-
-
 
 /******************** JPEG DECOMPRESSION SAMPLE INTERFACE *******************/
 

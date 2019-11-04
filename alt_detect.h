@@ -35,7 +35,7 @@ typedef struct
     int num_lines;
     int num_points;
     float score;
-    char *name;
+    const char *name;
 } alt_detect_obj_t;
 
 
@@ -54,7 +54,7 @@ extern void alt_detect_uninit(void);
 
 // image in YUV420 format
 // return 0 on success
-extern int alt_detect_process(unsigned char *image, int width, int height);
+extern int alt_detect_process_yuv420(unsigned char *image, int width, int height);
 
 extern int alt_detect_result_ready(void);
 
@@ -64,6 +64,13 @@ extern int alt_detect_get_result(alt_detect_result_t *alt_detect_result);
 
 // safe to call with null pointer
 extern void alt_detect_free_result(alt_detect_result_t *alt_detect_result);
+
+extern void alt_detect_save_yuv420(unsigned char *image, int width, int height,
+                                   const char *filename);
+
+extern void alt_detect_render_save_yuv420(unsigned char *image, int width, int height,
+                                          alt_detect_result_t *alt_detect_result,
+                                          const char *filename);
 
 
 #ifdef __cplusplus

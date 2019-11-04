@@ -60,6 +60,11 @@ bool HumanPoseEstimator::resultIsReady(void) {
 }
 
 
+void HumanPoseEstimator::waitResult(void) {
+    request.Wait(InferenceEngine::IInferRequest::WaitMode::RESULT_READY);
+}
+
+
 std::vector<HumanPose> HumanPoseEstimator::estimate(const cv::Mat& image) {
     lastImageSize = image.size();
     if (changeInputWidth(lastImageSize)) {
@@ -121,12 +126,10 @@ void HumanPoseEstimator::estimateAsync(const cv::Mat& image) {
 
 
 std::vector<HumanPose> HumanPoseEstimator::getResult(void) {
-    std::cout << "get blob pafsBlobName" << std::endl;
+    waitResult();
     InferenceEngine::Blob::Ptr pafsBlob = request.GetBlob(pafsBlobName);
-    std::cout << "get blob heatmaps" << std::endl;
     InferenceEngine::Blob::Ptr heatMapsBlob = request.GetBlob(heatmapsBlobName);
     //CV_Assert(heatMapsBlob->getTensorDesc().getDims()[1] == keypointsNumber + 1);
-    std::cout << "get tensor desc heatmaps" << std::endl;
     InferenceEngine::SizeVector heatMapDims =
             heatMapsBlob->getTensorDesc().getDims();
     std::vector<HumanPose> poses = postprocess(

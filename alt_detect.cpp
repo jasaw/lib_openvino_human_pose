@@ -13,12 +13,52 @@
 #include <iostream>
 #include <fstream>
 #include <algorithm>
+#include <map>
 #include <sys/stat.h>
 #include <opencv2/opencv.hpp>
 #include "human_pose_estimator.hpp"
 #include "alt_detect.h"
 
 static human_pose_estimation::HumanPoseEstimator *estimator = NULL;
+
+
+//static const char *humanPoseIdToName(int id)
+//{
+//    // Result for BODY_25 (25 body parts consisting of COCO + foot)
+//    const std::map<int, std::string> POSE_BODY_25_BODY_PARTS = {
+//        {0,  "Nose"},
+//        {1,  "Neck"},
+//        {2,  "RShoulder"},
+//        {3,  "RElbow"},
+//        {4,  "RWrist"},
+//        {5,  "LShoulder"},
+//        {6,  "LElbow"},
+//        {7,  "LWrist"},
+//        {8,  "MidHip"},
+//        {9,  "RHip"},
+//        {10, "RKnee"},
+//        {11, "RAnkle"},
+//        {12, "LHip"},
+//        {13, "LKnee"},
+//        {14, "LAnkle"},
+//        {15, "REye"},
+//        {16, "LEye"},
+//        {17, "REar"},
+//        {18, "LEar"},
+//        {19, "LBigToe"},
+//        {20, "LSmallToe"},
+//        {21, "LHeel"},
+//        {22, "RBigToe"},
+//        {23, "RSmallToe"},
+//        {24, "RHeel"},
+//        {25, "Background"}
+//    };
+//    std::map<int, std::string>::const_iterator it;
+//    it = POSE_BODY_25_BODY_PARTS.find(id);
+//    if (it != POSE_BODY_25_BODY_PARTS.end())
+//        return it->second.c_str();
+//    return NULL;
+//}
 
 
 static void humanPoseToLines(const std::vector<human_pose_estimation::HumanPose>& poses, alt_detect_result_t *alt_detect_result)
@@ -40,6 +80,7 @@ static void humanPoseToLines(const std::vector<human_pose_estimation::HumanPose>
         std::cerr << "Error: failed to allocate memory for results" << std::endl;
         return;
     }
+    memset(alt_detect_result->objs, 0, sizeof(alt_detect_obj_t)*num_poses);
     alt_detect_result->num_objs = 0;
 
     for (const auto& pose : poses) {
@@ -75,7 +116,7 @@ static void humanPoseToLines(const std::vector<human_pose_estimation::HumanPose>
 #define CYCbCr2G(Y, Cb, Cr) CLIP( Y - (( 22544 * Cb + 46793 * Cr ) >> 16) + 135)
 #define CYCbCr2B(Y, Cb, Cr) CLIP( Y + (116129 * Cb >> 16 ) - 226 )
 
-static cv::Mat YuvToBgr(unsigned char *pBuffer, int width, int height)
+static cv::Mat Yuv420ToBgr(unsigned char *pBuffer, int width, int height)
 {
     cv::Mat result(height,width,CV_8UC3);
     unsigned char y;
@@ -110,36 +151,76 @@ static cv::Mat YuvToBgr(unsigned char *pBuffer, int width, int height)
 }
 
 
-#if 0
-static void debug_write_raw_image(cv::Mat &img)
+static void save_image_as_png(cv::Mat &img, const char *filename)
 {
-    cv::Size imageSize = img.size();
-
-    std::cout << "imageSize.width = " << imageSize.width << std::endl;
-    std::cout << "imageSize.height = " << imageSize.height << std::endl;
-
+    //cv::Size imageSize = img.size();
+    //std::cout << "imageSize.width = " << imageSize.width << std::endl;
+    //std::cout << "imageSize.height = " << imageSize.height << std::endl;
     std::vector<int> compression_params;
     compression_params.push_back(cv::IMWRITE_PNG_COMPRESSION);
     compression_params.push_back(0);
 
     try {
-        cv::imwrite("libopenvinohumanpose.png", img, compression_params);
+        cv::imwrite(filename, img, compression_params);
     }
     catch (std::runtime_error& ex) {
-        fprintf(stderr, "Exception converting image to PNG format: %s\n", ex.what());
+        std::cerr << "Exception converting image to PNG format: " << ex.what() << std::endl;
     }
 }
-#endif
+
+
+void alt_detect_save_yuv420(unsigned char *image, int width, int height, const char *filename)
+{
+    cv::Mat img = Yuv420ToBgr(image, width, height);
+    save_image_as_png(img, filename);
+}
+
+
+void alt_detect_render_save_yuv420(unsigned char *image, int width, int height,
+                                   alt_detect_result_t *alt_detect_result,
+                                   const char *filename)
+{
+    const std::vector<cv::Scalar> colors = {
+        cv::Scalar(255, 0, 0), cv::Scalar(255, 85, 0), cv::Scalar(255, 170, 0),
+        cv::Scalar(255, 255, 0), cv::Scalar(170, 255, 0), cv::Scalar(85, 255, 0),
+        cv::Scalar(0, 255, 0), cv::Scalar(0, 255, 85), cv::Scalar(0, 255, 170),
+        cv::Scalar(0, 255, 255), cv::Scalar(0, 170, 255), cv::Scalar(0, 85, 255),
+        cv::Scalar(0, 0, 255), cv::Scalar(85, 0, 255), cv::Scalar(170, 0, 255),
+        cv::Scalar(255, 0, 255), cv::Scalar(255, 0, 170), cv::Scalar(255, 0, 85)
+    };
+    const int stickWidth = 4;
+
+    cv::Mat img = Yuv420ToBgr(image, width, height);
+    cv::Mat pane = img.clone();
+    for (int i = 0; i < alt_detect_result->num_objs; i++) {
+        alt_detect_obj_t *cur_obj = &alt_detect_result->objs[i];
+        for (int j = 0; j < cur_obj->num_lines; j++) {
+            alt_detect_line_t *cur_line = &cur_obj->lines[j];
+            cv::Point2f Keypoint1(cur_line->p[0].x, cur_line->p[0].y);
+            cv::Point2f Keypoint2(cur_line->p[1].x, cur_line->p[1].y);
+            std::pair<cv::Point2f, cv::Point2f> limbKeypoints(Keypoint1, Keypoint2);
+            float meanX = (limbKeypoints.first.x + limbKeypoints.second.x) / 2;
+            float meanY = (limbKeypoints.first.y + limbKeypoints.second.y) / 2;
+            cv::Point difference = limbKeypoints.first - limbKeypoints.second;
+            double length = std::sqrt(difference.x * difference.x + difference.y * difference.y);
+            int angle = static_cast<int>(std::atan2(difference.y, difference.x) * 180 / CV_PI);
+            std::vector<cv::Point> polygon;
+            cv::ellipse2Poly(cv::Point2d(meanX, meanY), cv::Size2d(length / 2, stickWidth),
+                             angle, 0, 360, 1, polygon);
+            cv::fillConvexPoly(pane, polygon, colors[cur_line->p[1].id]);
+        }
+    }
+    cv::addWeighted(img, 0.4, pane, 0.6, 0, img);
+    save_image_as_png(img, filename);
+}
 
 
 // image in YUV420 format
 // return 0 on success
-int alt_detect_process(unsigned char *image, int width, int height)
+int alt_detect_process_yuv420(unsigned char *image, int width, int height)
 {
-    cv::Mat img = YuvToBgr(image, width, height);
-
-    //debug_write_raw_image(img);
-
+    cv::Mat img = Yuv420ToBgr(image, width, height);
+    //save_image_as_png(img, "libopenvinohumanpose.png");
     estimator->estimateAsync(img);
     return 0;
 }
@@ -172,22 +253,20 @@ int alt_detect_get_result(alt_detect_result_t *alt_detect_result)
 void alt_detect_free_result(alt_detect_result_t *alt_detect_result)
 {
     if (alt_detect_result) {
-        if (alt_detect_result->objs) {
-            for (int i = 0; i < alt_detect_result->num_objs; i++) {
-                if (alt_detect_result->objs[i].lines) {
-                    delete alt_detect_result->objs[i].lines;
-                    alt_detect_result->objs[i].lines = NULL;
-                }
-                alt_detect_result->objs[i].num_lines = 0;
-                if (alt_detect_result->objs[i].points) {
-                    delete alt_detect_result->objs[i].points;
-                    alt_detect_result->objs[i].points = NULL;
-                }
-                alt_detect_result->objs[i].num_points = 0;
+        for (int i = 0; i < alt_detect_result->num_objs; i++) {
+            if (alt_detect_result->objs[i].lines) {
+                delete alt_detect_result->objs[i].lines;
+                alt_detect_result->objs[i].lines = NULL;
             }
-            delete alt_detect_result->objs;
-            alt_detect_result->objs = NULL;
+            alt_detect_result->objs[i].num_lines = 0;
+            if (alt_detect_result->objs[i].points) {
+                delete alt_detect_result->objs[i].points;
+                alt_detect_result->objs[i].points = NULL;
+            }
+            alt_detect_result->objs[i].num_points = 0;
         }
+        delete alt_detect_result->objs;
+        alt_detect_result->objs = NULL;
         alt_detect_result->num_objs = 0;
     }
 }
@@ -228,7 +307,7 @@ int alt_detect_init(const char *config_file)
     } else {
         std::cerr << "Couldn't open " << config_file << " config file" << std::endl;
     }
-    std::cout << "loaded config file "<< config_file << std::endl;
+    //std::cout << "loaded config file "<< config_file << std::endl;
 
     if (stat(_modelXmlPath.c_str(), &st) != 0)
     {

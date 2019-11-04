@@ -28,6 +28,7 @@ public:
     std::vector<HumanPose> estimate(const cv::Mat& image);
     void estimateAsync(const cv::Mat& image);
     bool resultIsReady(void);
+    void waitResult(void);
     std::vector<HumanPose> getResult(void);
     ~HumanPoseEstimator();
 
