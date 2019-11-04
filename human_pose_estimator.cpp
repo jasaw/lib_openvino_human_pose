@@ -17,7 +17,8 @@ const size_t HumanPoseEstimator::keypointsNumber = 18;
 HumanPoseEstimator::HumanPoseEstimator(const std::string& modelXmlPath_,
                                        const std::string& modelBinPath_,
                                        const std::string& targetDeviceName_)
-    : minJointsNumber(3),
+    : requestCount(0),
+      minJointsNumber(3),
       stride(8),
       pad(cv::Vec4i::all(0)),
       meanPixel(cv::Vec3f::all(128)),
@@ -54,7 +55,16 @@ HumanPoseEstimator::~HumanPoseEstimator() {
 }
 
 
+bool HumanPoseEstimator::queueIsEmpty(void) {
+    if (requestCount > 0)
+        return false;
+    return true;
+}
+
+
 bool HumanPoseEstimator::resultIsReady(void) {
+    if (requestCount < 1)
+        return false;
     InferenceEngine::StatusCode state = request.Wait(InferenceEngine::IInferRequest::WaitMode::STATUS_ONLY);
     return (InferenceEngine::StatusCode::OK == state);
 }
@@ -66,6 +76,12 @@ void HumanPoseEstimator::waitResult(void) {
 
 
 std::vector<HumanPose> HumanPoseEstimator::estimate(const cv::Mat& image) {
+    if (requestCount > 0) {
+        std::vector<HumanPose> poses;
+        return poses;
+    }
+    requestCount++;
+
     lastImageSize = image.size();
     if (changeInputWidth(lastImageSize)) {
         auto input_shapes = network.getInputShapes();
@@ -99,11 +115,17 @@ std::vector<HumanPose> HumanPoseEstimator::estimate(const cv::Mat& image) {
             pafsBlob->getTensorDesc().getDims()[1],
             heatMapDims[3], heatMapDims[2], lastImageSize);
 
+    requestCount--;
+
     return poses;
 }
 
 
 void HumanPoseEstimator::estimateAsync(const cv::Mat& image) {
+    if (requestCount > 0)
+        return;
+    requestCount++;
+
     lastImageSize = image.size();
     if (changeInputWidth(lastImageSize)) {
         auto input_shapes = network.getInputShapes();
@@ -126,6 +148,10 @@ void HumanPoseEstimator::estimateAsync(const cv::Mat& image) {
 
 
 std::vector<HumanPose> HumanPoseEstimator::getResult(void) {
+    if (requestCount < 1) {
+        std::vector<HumanPose> poses;
+        return poses;
+    }
     waitResult();
     InferenceEngine::Blob::Ptr pafsBlob = request.GetBlob(pafsBlobName);
     InferenceEngine::Blob::Ptr heatMapsBlob = request.GetBlob(heatmapsBlobName);
@@ -140,6 +166,7 @@ std::vector<HumanPose> HumanPoseEstimator::getResult(void) {
             heatMapDims[2] * heatMapDims[3],
             pafsBlob->getTensorDesc().getDims()[1],
             heatMapDims[3], heatMapDims[2], lastImageSize);
+    requestCount--;
     return poses;
 }
 

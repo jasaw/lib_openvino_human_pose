@@ -27,6 +27,7 @@ public:
                        const std::string& targetDeviceName);
     std::vector<HumanPose> estimate(const cv::Mat& image);
     void estimateAsync(const cv::Mat& image);
+    bool queueIsEmpty(void);
     bool resultIsReady(void);
     void waitResult(void);
     std::vector<HumanPose> getResult(void);
@@ -47,6 +48,7 @@ private:
                             const cv::Size& imageSize) const;
     bool changeInputWidth(const cv::Size& imageSize);
 
+    int requestCount;
     int minJointsNumber;
     int stride;
     cv::Vec4i pad;

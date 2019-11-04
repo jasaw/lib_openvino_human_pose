@@ -226,6 +226,14 @@ int alt_detect_process_yuv420(unsigned char *image, int width, int height)
 }
 
 
+int alt_detect_queue_empty(void)
+{
+    if (estimator->queueIsEmpty())
+        return 1;
+    return 0;
+}
+
+
 int alt_detect_result_ready(void)
 {
     if (estimator->resultIsReady())

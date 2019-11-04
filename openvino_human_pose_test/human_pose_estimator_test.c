@@ -33,6 +33,7 @@ typedef struct
     void (*alt_detect_uninit)();
     int (*alt_detect_process_yuv420)(unsigned char *, int, int);
     int (*alt_detect_result_ready)(void);
+    int (*alt_detect_queue_empty)(void);
     int (*alt_detect_get_result)(alt_detect_result_t *);
     void (*alt_detect_free_result)(alt_detect_result_t *);
     void (*alt_detect_save_yuv420)(unsigned char *, int, int, const char *);
@@ -72,6 +73,7 @@ static int lib_detect_load(lib_detect_info *libdetect, const char *lib_detect_pa
     err |= lib_detect_load_sym((void **)(&libdetect->alt_detect_init),   libdetect->handle, "alt_detect_init");
     err |= lib_detect_load_sym((void **)(&libdetect->alt_detect_uninit), libdetect->handle, "alt_detect_uninit");
     err |= lib_detect_load_sym((void **)(&libdetect->alt_detect_process_yuv420), libdetect->handle, "alt_detect_process_yuv420");
+    err |= lib_detect_load_sym((void **)(&libdetect->alt_detect_queue_empty), libdetect->handle, "alt_detect_queue_empty");
     err |= lib_detect_load_sym((void **)(&libdetect->alt_detect_result_ready), libdetect->handle, "alt_detect_result_ready");
     err |= lib_detect_load_sym((void **)(&libdetect->alt_detect_get_result), libdetect->handle, "alt_detect_get_result");
     err |= lib_detect_load_sym((void **)(&libdetect->alt_detect_free_result), libdetect->handle, "alt_detect_free_result");
@@ -334,25 +336,31 @@ int main(int argc, char *argv[])
         ret = -1;
         goto clean_up;
     }
-    printf("process image\n");
-    libdetect.alt_detect_process_yuv420(yuv_image, width, height);
 
-    printf("wait for result ...\n");
-    while (!libdetect.alt_detect_result_ready()) {
-        sleep(1);
+    if (libdetect.alt_detect_queue_empty())
+    {
+        printf("process image\n");
+        libdetect.alt_detect_process_yuv420(yuv_image, width, height);
+
         printf("wait for result ...\n");
+        while (!libdetect.alt_detect_result_ready()) {
+            sleep(1);
+            printf("wait for result ...\n");
+        }
+        printf("result ready\n");
+
+        printf("get result\n");
+        libdetect.alt_detect_get_result(&alt_detect_result);
+
+        // overlay result on image
+        printf("overlay result on image\n");
+        overlay_result_on_image(&libdetect, yuv_image, width, height, &alt_detect_result);
+
+        printf("free result\n");
+        libdetect.alt_detect_free_result(&alt_detect_result);
     }
-    printf("result ready\n");
-
-    printf("get result\n");
-    libdetect.alt_detect_get_result(&alt_detect_result);
-
-    // overlay result on image
-    printf("overlay result on image\n");
-    overlay_result_on_image(&libdetect, yuv_image, width, height, &alt_detect_result);
-
-    printf("free result\n");
-    libdetect.alt_detect_free_result(&alt_detect_result);
+    else
+        printf("Queue is not empty, skipping detection\n");
 
     libdetect.alt_detect_uninit();
 

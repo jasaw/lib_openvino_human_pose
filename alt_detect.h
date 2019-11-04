@@ -56,6 +56,8 @@ extern void alt_detect_uninit(void);
 // return 0 on success
 extern int alt_detect_process_yuv420(unsigned char *image, int width, int height);
 
+extern int alt_detect_queue_empty(void);
+
 extern int alt_detect_result_ready(void);
 
 // caller frees memory by calling alt_detect_free_results
