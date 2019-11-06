@@ -1,4 +1,4 @@
-CXXFLAGS = -W -Wall -pthread -g -O3 $(EXTRA_CXXFLAGS) -march=armv7-a
+CXXFLAGS = -W -Wall -pthread -g -O3 -march=armv7-a -DNDEBUG $(EXTRA_CXXFLAGS)
 RM = rm -rf
 CXX ?= $(CROSS)g++
 AR ?= $(CROSS)ar
@@ -43,7 +43,7 @@ libopenvinohumanpose.so: $(POSE_OBJ)
 	$(CXX) -shared -fPIC $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
 clean:
-	-@$(RM) *.a *.so $(POSE_OBJ)
+	$(RM) *.a *.so $(POSE_OBJ)
 
 install:
 	mkdir -p $(PREFIX)/include/libopenvinohumanpose/

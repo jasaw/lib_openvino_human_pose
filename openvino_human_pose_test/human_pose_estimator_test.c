@@ -36,9 +36,10 @@ typedef struct
     int (*alt_detect_queue_empty)(void);
     int (*alt_detect_get_result)(alt_detect_result_t *);
     void (*alt_detect_free_result)(alt_detect_result_t *);
-    void (*alt_detect_save_yuv420)(unsigned char *, int, int, const char *);
-    void (*alt_detect_render_save_yuv420)(unsigned char *, int, int,
-                                          alt_detect_result_t *, const char *);
+    const char *(*alt_detect_err_msg)(void);
+    int (*alt_detect_save_yuv420)(unsigned char *, int, int, const char *);
+    int (*alt_detect_render_save_yuv420)(unsigned char *, int, int,
+                                         alt_detect_result_t *, const char *);
 
 } lib_detect_info;
 
@@ -77,6 +78,7 @@ static int lib_detect_load(lib_detect_info *libdetect, const char *lib_detect_pa
     err |= lib_detect_load_sym((void **)(&libdetect->alt_detect_result_ready), libdetect->handle, "alt_detect_result_ready");
     err |= lib_detect_load_sym((void **)(&libdetect->alt_detect_get_result), libdetect->handle, "alt_detect_get_result");
     err |= lib_detect_load_sym((void **)(&libdetect->alt_detect_free_result), libdetect->handle, "alt_detect_free_result");
+    err |= lib_detect_load_sym((void **)(&libdetect->alt_detect_err_msg), libdetect->handle, "alt_detect_err_msg");
     err |= lib_detect_load_sym((void **)(&libdetect->alt_detect_save_yuv420), libdetect->handle, "alt_detect_save_yuv420");
     err |= lib_detect_load_sym((void **)(&libdetect->alt_detect_render_save_yuv420), libdetect->handle, "alt_detect_render_save_yuv420");
     if (err)
@@ -332,7 +334,8 @@ int main(int argc, char *argv[])
     printf("Loaded detection library\n");
     if (libdetect.alt_detect_init(config_file))
     {
-        fprintf(stderr, "Error: failed to initialize detection library\n");
+        const char *errmsg = libdetect.alt_detect_err_msg();
+        fprintf(stderr, "Error: %s\n", errmsg);
         ret = -1;
         goto clean_up;
     }
@@ -340,24 +343,35 @@ int main(int argc, char *argv[])
     if (libdetect.alt_detect_queue_empty())
     {
         printf("process image\n");
-        libdetect.alt_detect_process_yuv420(yuv_image, width, height);
-
-        printf("wait for result ...\n");
-        while (!libdetect.alt_detect_result_ready()) {
-            sleep(1);
-            printf("wait for result ...\n");
+        if (libdetect.alt_detect_process_yuv420(yuv_image, width, height))
+        {
+            const char *errmsg = libdetect.alt_detect_err_msg();
+            fprintf(stderr, "Error: %s\n", errmsg);
+            ret = -1;
         }
-        printf("result ready\n");
+        else
+        {
+            printf("wait for result ...\n");
+            while (!libdetect.alt_detect_result_ready()) {
+                sleep(1);
+                printf("wait for result ...\n");
+            }
+            printf("result ready\n");
 
-        printf("get result\n");
-        libdetect.alt_detect_get_result(&alt_detect_result);
+            printf("get result\n");
+            if (libdetect.alt_detect_get_result(&alt_detect_result) < 0)
+            {
+                const char *errmsg = libdetect.alt_detect_err_msg();
+                fprintf(stderr, "Error: %s\n", errmsg);
+            }
 
-        // overlay result on image
-        printf("overlay result on image\n");
-        overlay_result_on_image(&libdetect, yuv_image, width, height, &alt_detect_result);
+            // overlay result on image
+            printf("overlay result on image\n");
+            overlay_result_on_image(&libdetect, yuv_image, width, height, &alt_detect_result);
 
-        printf("free result\n");
-        libdetect.alt_detect_free_result(&alt_detect_result);
+            printf("free result\n");
+            libdetect.alt_detect_free_result(&alt_detect_result);
+        }
     }
     else
         printf("Queue is not empty, skipping detection\n");

@@ -67,12 +67,14 @@ extern int alt_detect_get_result(alt_detect_result_t *alt_detect_result);
 // safe to call with null pointer
 extern void alt_detect_free_result(alt_detect_result_t *alt_detect_result);
 
-extern void alt_detect_save_yuv420(unsigned char *image, int width, int height,
-                                   const char *filename);
+extern const char *alt_detect_err_msg(void);
 
-extern void alt_detect_render_save_yuv420(unsigned char *image, int width, int height,
-                                          alt_detect_result_t *alt_detect_result,
-                                          const char *filename);
+extern int alt_detect_save_yuv420(unsigned char *image, int width, int height,
+                                  const char *filename);
+
+extern int alt_detect_render_save_yuv420(unsigned char *image, int width, int height,
+                                         alt_detect_result_t *alt_detect_result,
+                                         const char *filename);
 
 
 #ifdef __cplusplus

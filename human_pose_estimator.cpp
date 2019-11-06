@@ -46,12 +46,12 @@ HumanPoseEstimator::HumanPoseEstimator(const std::string& modelXmlPath_,
     executableNetwork = ie.LoadNetwork(network, targetDeviceName);
     request = executableNetwork.CreateInferRequest();
 
-    std::cout << "IE network initialized" << std::endl;
+    //std::cout << "IE network initialized" << std::endl;
 }
 
 
 HumanPoseEstimator::~HumanPoseEstimator() {
-    std::cout << "IE network uninitialized" << std::endl;
+    //std::cout << "IE network uninitialized" << std::endl;
 }
 
 
@@ -103,7 +103,7 @@ std::vector<HumanPose> HumanPoseEstimator::estimate(const cv::Mat& image) {
 
     InferenceEngine::Blob::Ptr pafsBlob = request.GetBlob(pafsBlobName);
     InferenceEngine::Blob::Ptr heatMapsBlob = request.GetBlob(heatmapsBlobName);
-    //CV_Assert(heatMapsBlob->getTensorDesc().getDims()[1] == keypointsNumber + 1);
+    CV_Assert(heatMapsBlob->getTensorDesc().getDims()[1] == keypointsNumber + 1);
     InferenceEngine::SizeVector heatMapDims =
             heatMapsBlob->getTensorDesc().getDims();
     std::vector<HumanPose> poses = postprocess(
@@ -155,7 +155,7 @@ std::vector<HumanPose> HumanPoseEstimator::getResult(void) {
     waitResult();
     InferenceEngine::Blob::Ptr pafsBlob = request.GetBlob(pafsBlobName);
     InferenceEngine::Blob::Ptr heatMapsBlob = request.GetBlob(heatmapsBlobName);
-    //CV_Assert(heatMapsBlob->getTensorDesc().getDims()[1] == keypointsNumber + 1);
+    CV_Assert(heatMapsBlob->getTensorDesc().getDims()[1] == keypointsNumber + 1);
     InferenceEngine::SizeVector heatMapDims =
             heatMapsBlob->getTensorDesc().getDims();
     std::vector<HumanPose> poses = postprocess(
