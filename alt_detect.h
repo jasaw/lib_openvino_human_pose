@@ -62,7 +62,8 @@ extern int alt_detect_result_ready(void);
 
 // caller frees memory by calling alt_detect_free_results
 // alt_detect_result will be initialized
-extern int alt_detect_get_result(alt_detect_result_t *alt_detect_result);
+extern int alt_detect_get_result(float score_threshold,
+                                 alt_detect_result_t *alt_detect_result);
 
 // safe to call with null pointer
 extern void alt_detect_free_result(alt_detect_result_t *alt_detect_result);

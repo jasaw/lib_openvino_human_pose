@@ -68,7 +68,9 @@ const char *alt_detect_err_msg(void)
 //}
 
 
-static void humanPoseToLines(const std::vector<human_pose_estimation::HumanPose>& poses, alt_detect_result_t *alt_detect_result)
+static void humanPoseToLines(const std::vector<human_pose_estimation::HumanPose>& poses,
+                             float score_threshold,
+                             alt_detect_result_t *alt_detect_result)
 {
     const std::vector<std::pair<int, int> > limbKeypointsIds = {
         {1, 2},  {1, 5},   {2, 3},
@@ -92,6 +94,8 @@ static void humanPoseToLines(const std::vector<human_pose_estimation::HumanPose>
 
     for (const auto& pose : poses) {
         alt_detect_obj_t *cur_obj = &alt_detect_result->objs[alt_detect_result->num_objs];
+        if (cur_obj->score < score_threshold)
+            continue;
         cur_obj->score = pose.score;
         cur_obj->lines = new alt_detect_line_t[human_pose_estimation::HumanPoseEstimator::keypointsNumber];
         memset(cur_obj->lines, 0, sizeof(alt_detect_line_t)*human_pose_estimation::HumanPoseEstimator::keypointsNumber);
@@ -267,7 +271,7 @@ int alt_detect_result_ready(void)
 
 
 // caller frees memory by calling alt_detect_free_results
-int alt_detect_get_result(alt_detect_result_t *alt_detect_result)
+int alt_detect_get_result(float score_threshold, alt_detect_result_t *alt_detect_result)
 {
     if (alt_detect_result == NULL)
         return -1;
@@ -276,7 +280,7 @@ int alt_detect_get_result(alt_detect_result_t *alt_detect_result)
     try {
         if (estimator->resultIsReady()) {
             std::vector<human_pose_estimation::HumanPose> poses = estimator->getResult();
-            humanPoseToLines(poses, alt_detect_result);
+            humanPoseToLines(poses, score_threshold, alt_detect_result);
         }
     }
     catch (const std::exception &ex) {
@@ -292,20 +296,22 @@ int alt_detect_get_result(alt_detect_result_t *alt_detect_result)
 void alt_detect_free_result(alt_detect_result_t *alt_detect_result)
 {
     if (alt_detect_result) {
-        for (int i = 0; i < alt_detect_result->num_objs; i++) {
-            if (alt_detect_result->objs[i].lines) {
-                delete alt_detect_result->objs[i].lines;
-                alt_detect_result->objs[i].lines = NULL;
+        if (alt_detect_result->objs) {
+            for (int i = 0; i < alt_detect_result->num_objs; i++) {
+                if (alt_detect_result->objs[i].lines) {
+                    delete alt_detect_result->objs[i].lines;
+                    alt_detect_result->objs[i].lines = NULL;
+                }
+                alt_detect_result->objs[i].num_lines = 0;
+                if (alt_detect_result->objs[i].points) {
+                    delete alt_detect_result->objs[i].points;
+                    alt_detect_result->objs[i].points = NULL;
+                }
+                alt_detect_result->objs[i].num_points = 0;
             }
-            alt_detect_result->objs[i].num_lines = 0;
-            if (alt_detect_result->objs[i].points) {
-                delete alt_detect_result->objs[i].points;
-                alt_detect_result->objs[i].points = NULL;
-            }
-            alt_detect_result->objs[i].num_points = 0;
+            delete alt_detect_result->objs;
+            alt_detect_result->objs = NULL;
         }
-        delete alt_detect_result->objs;
-        alt_detect_result->objs = NULL;
         alt_detect_result->num_objs = 0;
     }
 }
