@@ -276,10 +276,10 @@ int alt_detect_get_result(float score_threshold, alt_detect_result_t *alt_detect
     if (alt_detect_result == NULL)
         return -1;
 
-    memset(alt_detect_result, 0, sizeof(alt_detect_result_t));
     try {
         if (estimator->resultIsReady()) {
             std::vector<human_pose_estimation::HumanPose> poses = estimator->getResult();
+            alt_detect_free_result(alt_detect_result);
             humanPoseToLines(poses, score_threshold, alt_detect_result);
         }
     }
