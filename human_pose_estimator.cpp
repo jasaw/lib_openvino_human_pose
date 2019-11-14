@@ -20,7 +20,6 @@ HumanPoseEstimator::HumanPoseEstimator(const std::string& modelXmlPath_,
     : requestCount(0),
       minJointsNumber(3),
       stride(8),
-      pad(cv::Vec4i::all(0)),
       meanPixel(cv::Vec3f::all(128)),
       minPeaksDistance(3.0f),
       midPointsScoreThreshold(0.05f),
@@ -45,13 +44,16 @@ HumanPoseEstimator::HumanPoseEstimator(const std::string& modelXmlPath_,
 
     executableNetwork = ie.LoadNetwork(network, targetDeviceName);
     request = executableNetwork.CreateInferRequest();
-
-    //std::cout << "IE network initialized" << std::endl;
 }
 
 
 HumanPoseEstimator::~HumanPoseEstimator() {
-    //std::cout << "IE network uninitialized" << std::endl;
+}
+
+
+void HumanPoseEstimator::getInputWidthHeight(int *width, int *height) {
+    *width = inputLayerSize.width;
+    *height = inputLayerSize.height;
 }
 
 
@@ -75,29 +77,18 @@ void HumanPoseEstimator::waitResult(void) {
 }
 
 
-std::vector<HumanPose> HumanPoseEstimator::estimate(const cv::Mat& image) {
+std::vector<HumanPose> HumanPoseEstimator::estimate(const cv::Mat& scaledImage, const cv::Size& orgImageSize) {
     if (requestCount > 0) {
         std::vector<HumanPose> poses;
         return poses;
     }
     requestCount++;
 
-    lastImageSize = image.size();
-    if (changeInputWidth(lastImageSize)) {
-        auto input_shapes = network.getInputShapes();
-        std::string input_name;
-        InferenceEngine::SizeVector input_shape;
-        std::tie(input_name, input_shape) = *input_shapes.begin();
-        input_shape[2] = inputLayerSize.height;
-        input_shape[3] = inputLayerSize.width;
-        input_shapes[input_name] = input_shape;
-        network.reshape(input_shapes);
-        executableNetwork = ie.LoadNetwork(network, targetDeviceName);
-        request = executableNetwork.CreateInferRequest();
-    }
+    auto scaledImageSize = scaledImage.size();
     InferenceEngine::Blob::Ptr input = request.GetBlob(network.getInputsInfo().begin()->first);
     auto buffer = input->buffer().as<InferenceEngine::PrecisionTrait<InferenceEngine::Precision::U8>::value_type *>();
-    preprocess(image, buffer);
+    cv::Mat paddedImage = padImage(scaledImage);
+    imageToBuffer(paddedImage, buffer);
 
     request.Infer();
 
@@ -113,7 +104,7 @@ std::vector<HumanPose> HumanPoseEstimator::estimate(const cv::Mat& image) {
             pafsBlob->buffer(),
             heatMapDims[2] * heatMapDims[3],
             pafsBlob->getTensorDesc().getDims()[1],
-            heatMapDims[3], heatMapDims[2], lastImageSize);
+            heatMapDims[3], heatMapDims[2], orgImageSize, scaledImageSize);
 
     requestCount--;
 
@@ -121,33 +112,21 @@ std::vector<HumanPose> HumanPoseEstimator::estimate(const cv::Mat& image) {
 }
 
 
-void HumanPoseEstimator::estimateAsync(const cv::Mat& image) {
+void HumanPoseEstimator::estimateAsync(const cv::Mat& scaledImage) {
     if (requestCount > 0)
         return;
     requestCount++;
 
-    lastImageSize = image.size();
-    if (changeInputWidth(lastImageSize)) {
-        auto input_shapes = network.getInputShapes();
-        std::string input_name;
-        InferenceEngine::SizeVector input_shape;
-        std::tie(input_name, input_shape) = *input_shapes.begin();
-        input_shape[2] = inputLayerSize.height;
-        input_shape[3] = inputLayerSize.width;
-        input_shapes[input_name] = input_shape;
-        network.reshape(input_shapes);
-        executableNetwork = ie.LoadNetwork(network, targetDeviceName);
-        request = executableNetwork.CreateInferRequest();
-    }
+    cv::Mat paddedImage = padImage(scaledImage);
     InferenceEngine::Blob::Ptr input = request.GetBlob(network.getInputsInfo().begin()->first);
     auto buffer = input->buffer().as<InferenceEngine::PrecisionTrait<InferenceEngine::Precision::U8>::value_type *>();
-    preprocess(image, buffer);
+    imageToBuffer(paddedImage, buffer);
 
     request.StartAsync();
 }
 
 
-std::vector<HumanPose> HumanPoseEstimator::getResult(void) {
+std::vector<HumanPose> HumanPoseEstimator::getResult(const cv::Size& orgImageSize, const cv::Size& scaledImageSize) {
     if (requestCount < 1) {
         std::vector<HumanPose> poses;
         return poses;
@@ -165,32 +144,50 @@ std::vector<HumanPose> HumanPoseEstimator::getResult(void) {
             pafsBlob->buffer(),
             heatMapDims[2] * heatMapDims[3],
             pafsBlob->getTensorDesc().getDims()[1],
-            heatMapDims[3], heatMapDims[2], lastImageSize);
+            heatMapDims[3], heatMapDims[2], orgImageSize, scaledImageSize);
     requestCount--;
     return poses;
 }
 
 
-void HumanPoseEstimator::preprocess(const cv::Mat& image, uint8_t* buffer) const {
-    cv::Mat resizedImage;
-    double scale = inputLayerSize.height / static_cast<double>(image.rows);
-    cv::resize(image, resizedImage, cv::Size(), scale, scale, cv::INTER_CUBIC);
-    cv::Mat paddedImage;
-    cv::copyMakeBorder(resizedImage, paddedImage, pad(0), pad(2), pad(1), pad(3),
-                       cv::BORDER_CONSTANT, meanPixel);
+void HumanPoseEstimator::imageToBuffer(const cv::Mat& scaledImage, uint8_t* buffer) const {
     std::vector<cv::Mat> planes(3);
     for (size_t pId = 0; pId < planes.size(); pId++) {
         planes[pId] = cv::Mat(inputLayerSize, CV_8UC1,
                               buffer + pId * inputLayerSize.area());
     }
-    cv::split(paddedImage, planes);
+    cv::split(scaledImage, planes);
 }
+
+
+cv::Mat HumanPoseEstimator::scaleImage(const cv::Mat& image) {
+    cv::Mat scaledImage;
+    double scale = inputLayerSize.height / static_cast<double>(image.rows);
+    cv::resize(image, scaledImage, cv::Size(), scale, scale, cv::INTER_CUBIC);
+    return padImage(scaledImage);
+}
+
+
+cv::Mat HumanPoseEstimator::padImage(const cv::Mat& scaledImage) const {
+    cv::Mat paddedImage;
+    cv::Size scaledImageSize = scaledImage.size();
+    int w_diff = inputLayerSize.width - scaledImageSize.width;
+    int h_diff = inputLayerSize.height - scaledImageSize.height;
+    int left = w_diff >> 1;
+    int right = w_diff - left;
+    int top = h_diff >> 1;
+    int bottom = h_diff - top;
+    cv::copyMakeBorder(scaledImage, paddedImage, top, bottom, left, right,
+                       cv::BORDER_CONSTANT, meanPixel);
+    return paddedImage;
+}
+
 
 std::vector<HumanPose> HumanPoseEstimator::postprocess(
         const float* heatMapsData, const int heatMapOffset, const int nHeatMaps,
         const float* pafsData, const int pafOffset, const int nPafs,
         const int featureMapWidth, const int featureMapHeight,
-        const cv::Size& imageSize) const {
+        const cv::Size& imageSize, const cv::Size& scaledImageSize) const {
     std::vector<cv::Mat> heatMaps(nHeatMaps);
     for (size_t i = 0; i < heatMaps.size(); i++) {
         heatMaps[i] = cv::Mat(featureMapHeight, featureMapWidth, CV_32FC1,
@@ -210,7 +207,7 @@ std::vector<HumanPose> HumanPoseEstimator::postprocess(
     resizeFeatureMaps(pafs);
 
     std::vector<HumanPose> poses = extractPoses(heatMaps, pafs);
-    correctCoordinates(poses, heatMaps[0].size(), imageSize);
+    correctCoordinates(poses, heatMaps[0].size(), imageSize, scaledImageSize);
     return poses;
 }
 
@@ -263,22 +260,30 @@ void HumanPoseEstimator::resizeFeatureMaps(std::vector<cv::Mat>& featureMaps) co
 
 void HumanPoseEstimator::correctCoordinates(std::vector<HumanPose>& poses,
                                             const cv::Size& featureMapsSize,
-                                            const cv::Size& imageSize) const {
+                                            const cv::Size& imageSize,
+                                            const cv::Size& scaledImageSize) const {
     cv::Size fullFeatureMapSize = featureMapsSize * stride / upsampleRatio;
 
+    int w_diff = inputLayerSize.width - scaledImageSize.width;
+    int h_diff = inputLayerSize.height - scaledImageSize.height;
+    int left = w_diff >> 1;
+    int right = w_diff - left;
+    int top = h_diff >> 1;
+    int bottom = h_diff - top;
+
     float scaleX = imageSize.width /
-            static_cast<float>(fullFeatureMapSize.width - pad(1) - pad(3));
+            static_cast<float>(fullFeatureMapSize.width - left - right);
     float scaleY = imageSize.height /
-            static_cast<float>(fullFeatureMapSize.height - pad(0) - pad(2));
+            static_cast<float>(fullFeatureMapSize.height - top - bottom);
     for (auto& pose : poses) {
         for (auto& keypoint : pose.keypoints) {
             if (keypoint != cv::Point2f(-1, -1)) {
                 keypoint.x *= stride / upsampleRatio;
-                keypoint.x -= pad(1);
+                keypoint.x -= left;
                 keypoint.x *= scaleX;
 
                 keypoint.y *= stride / upsampleRatio;
-                keypoint.y -= pad(0);
+                keypoint.y -= top;
                 keypoint.y *= scaleY;
             }
         }
@@ -286,26 +291,18 @@ void HumanPoseEstimator::correctCoordinates(std::vector<HumanPose>& poses,
 }
 
 
-bool HumanPoseEstimator::changeInputWidth(const cv::Size& imageSize) {
-    double scale = static_cast<double>(inputLayerSize.height) / static_cast<double>(imageSize.height);
-    cv::Size scaledSize(static_cast<int>(cvRound(imageSize.width * scale)),
-                        static_cast<int>(cvRound(imageSize.height * scale)));
-    cv::Size scaledImageSize(std::max(scaledSize.width, inputLayerSize.height), // max of width and height ???
-                             inputLayerSize.height);
-    int minHeight = std::min(scaledImageSize.height, scaledSize.height);
-    scaledImageSize.width = static_cast<int>(std::ceil(
-                scaledImageSize.width / static_cast<float>(stride))) * stride; // stride aligned
-    pad(0) = static_cast<int>(std::floor((scaledImageSize.height - minHeight) / 2.0));
-    pad(1) = static_cast<int>(std::floor((scaledImageSize.width - scaledSize.width) / 2.0));
-    pad(2) = scaledImageSize.height - minHeight - pad(0);
-    pad(3) = scaledImageSize.width - scaledSize.width - pad(1);
-    if (scaledSize.width == (inputLayerSize.width - pad(1) - pad(3))) {
-        return false;
-    }
-
-    inputLayerSize.width = scaledImageSize.width;
-    return true;
-}
+//bool HumanPoseEstimator::changeInputWidth(const cv::Size& scaledImageSize) {
+//    bool changed = false;
+//    if (inputLayerSize.height != scaledImageSize.height) {
+//        inputLayerSize.height  = scaledImageSize.height;
+//        changed = true;
+//    }
+//    if (inputLayerSize.width != scaledImageSize.width) {
+//        inputLayerSize.width  = scaledImageSize.width;
+//        changed = true;
+//    }
+//    return changed;
+//}
 
 
 }  // namespace human_pose_estimation

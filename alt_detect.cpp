@@ -229,11 +229,11 @@ int alt_detect_render_save_yuv420(unsigned char *image, int width, int height,
 }
 
 
-// image in YUV420 format
-// return 0 on success
-int alt_detect_process_yuv420(unsigned char *image, int width, int height)
+int alt_detect_process_scaled_bgr(unsigned char *image,
+                                  int scaled_width,
+                                  int scaled_height)
 {
-    cv::Mat img = Yuv420ToBgr(image, width, height);
+    cv::Mat img(scaled_height, scaled_width, CV_8UC3, image);
     //save_image_as_png(img, "libopenvinohumanpose.png");
     try {
         estimator->estimateAsync(img);
@@ -244,6 +244,31 @@ int alt_detect_process_yuv420(unsigned char *image, int width, int height)
         return -1;
     }
     return 0;
+}
+
+
+// image in YUV420 format
+// return 0 on success
+//int alt_detect_process_yuv420(unsigned char *image, int width, int height)
+//{
+//    cv::Mat img = Yuv420ToBgr(image, width, height);
+//    //save_image_as_png(img, "libopenvinohumanpose.png");
+//    try {
+//        cv::Mat scaledImg = estimator->scaleImage(img);
+//        estimator->estimateAsync(scaledImg);
+//    }
+//    catch (const std::exception &ex) {
+//        errMessage = "failed to queue inference: ";
+//        errMessage.append(ex.what());
+//        return -1;
+//    }
+//    return 0;
+//}
+
+
+void alt_detect_get_input_width_height(int *width, int *height)
+{
+    estimator->getInputWidthHeight(width, height);
 }
 
 
@@ -271,14 +296,18 @@ int alt_detect_result_ready(void)
 
 
 // caller frees memory by calling alt_detect_free_results
-int alt_detect_get_result(float score_threshold, alt_detect_result_t *alt_detect_result)
+int alt_detect_get_result(float score_threshold, int org_width, int org_height,
+                          int scaled_width, int scaled_height,
+                          alt_detect_result_t *alt_detect_result)
 {
     if (alt_detect_result == NULL)
         return -1;
 
     try {
         if (estimator->resultIsReady()) {
-            std::vector<human_pose_estimation::HumanPose> poses = estimator->getResult();
+            cv::Size orgImageSize(org_width, org_height);
+            cv::Size scaledImageSize(scaled_width, scaled_height);
+            std::vector<human_pose_estimation::HumanPose> poses = estimator->getResult(orgImageSize, scaledImageSize);
             alt_detect_free_result(alt_detect_result);
             humanPoseToLines(poses, score_threshold, alt_detect_result);
         }

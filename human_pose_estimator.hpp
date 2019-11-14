@@ -25,33 +25,35 @@ public:
     HumanPoseEstimator(const std::string& modelXmlPath,
                        const std::string& modelBinPath,
                        const std::string& targetDeviceName);
-    std::vector<HumanPose> estimate(const cv::Mat& image);
-    void estimateAsync(const cv::Mat& image);
+    std::vector<HumanPose> estimate(const cv::Mat& scaledImage, const cv::Size& orgImageSize);
+    void estimateAsync(const cv::Mat& scaledImage);
+    void getInputWidthHeight(int *width, int *height);
     bool queueIsEmpty(void);
     bool resultIsReady(void);
     void waitResult(void);
-    std::vector<HumanPose> getResult(void);
+    std::vector<HumanPose> getResult(const cv::Size& orgImageSize, const cv::Size& scaledImageSize);
+    cv::Mat scaleImage(const cv::Mat& image);
     ~HumanPoseEstimator();
 
 private:
-    void preprocess(const cv::Mat& image, uint8_t* buffer) const;
+    void imageToBuffer(const cv::Mat& scaledImage, uint8_t* buffer) const;
     std::vector<HumanPose> postprocess(
             const float* heatMapsData, const int heatMapOffset, const int nHeatMaps,
             const float* pafsData, const int pafOffset, const int nPafs,
             const int featureMapWidth, const int featureMapHeight,
-            const cv::Size& imageSize) const;
+            const cv::Size& imageSize, const cv::Size& scaledImageSize) const;
     std::vector<HumanPose> extractPoses(const std::vector<cv::Mat>& heatMaps,
                                         const std::vector<cv::Mat>& pafs) const;
     void resizeFeatureMaps(std::vector<cv::Mat>& featureMaps) const;
     void correctCoordinates(std::vector<HumanPose>& poses,
                             const cv::Size& featureMapsSize,
-                            const cv::Size& imageSize) const;
-    bool changeInputWidth(const cv::Size& imageSize);
+                            const cv::Size& imageSize,
+                            const cv::Size& scaledImageSize) const;
+    cv::Mat padImage(const cv::Mat& scaledImage) const;
 
     int requestCount;
     int minJointsNumber;
     int stride;
-    cv::Vec4i pad;
     cv::Vec3f meanPixel;
     float minPeaksDistance;
     float midPointsScoreThreshold;
@@ -69,7 +71,6 @@ private:
     std::string heatmapsBlobName;
     std::string modelXmlPath;
     std::string modelBinPath;
-    cv::Size lastImageSize;
 };
 
 }  // namespace human_pose_estimation
