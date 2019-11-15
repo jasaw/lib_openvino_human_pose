@@ -34,7 +34,7 @@ typedef struct
     int (*alt_detect_process_yuv420)(unsigned char *, int, int);
     int (*alt_detect_result_ready)(void);
     int (*alt_detect_queue_empty)(void);
-    int (*alt_detect_get_result)(float, alt_detect_result_t *);
+    int (*alt_detect_get_result)(float, int, int, alt_detect_result_t *);
     void (*alt_detect_free_result)(alt_detect_result_t *);
     const char *(*alt_detect_err_msg)(void);
     int (*alt_detect_save_yuv420)(unsigned char *, int, int, const char *);
@@ -359,7 +359,7 @@ int main(int argc, char *argv[])
             printf("result ready\n");
 
             printf("get result\n");
-            if (libdetect.alt_detect_get_result(0, &alt_detect_result) < 0)
+            if (libdetect.alt_detect_get_result(0, width, height, &alt_detect_result) < 0)
             {
                 const char *errmsg = libdetect.alt_detect_err_msg();
                 fprintf(stderr, "Error: %s\n", errmsg);

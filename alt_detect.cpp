@@ -3,7 +3,7 @@
 ** support, and with no warranty, express or implied, as to its usefulness for
 ** any purpose.
 **
-** Author: Joo Saw
+** Copyright: Joo Aun Saw
 **
 ** -------------------------------------------------------------------------*/
 
@@ -15,12 +15,90 @@
 #include <algorithm>
 #include <map>
 #include <sys/stat.h>
+extern "C" {
+#include <libavutil/imgutils.h>
+#include <libavutil/parseutils.h>
+#include <libswscale/swscale.h>
+}
 #include <opencv2/opencv.hpp>
 #include "human_pose_estimator.hpp"
 #include "alt_detect.h"
 
 static human_pose_estimation::HumanPoseEstimator *estimator = NULL;
 static std::string errMessage;
+
+
+static void get_scaled_image_dimensions(int width, int height, int *scaled_width, int *scaled_height)
+{
+    int input_height = 0;
+    int input_width  = 0;
+    estimator->getInputWidthHeight(&input_width, &input_height);
+    double scale_h = (double)input_height / height;
+    double scale_w = (double)input_width  / width;
+    double scale   = MIN(scale_h, scale_w);
+    *scaled_width  = (int)(width * scale);
+    *scaled_height = (int)(height * scale);
+}
+
+
+// caller must av_freep returned image
+static unsigned char *scale_yuv2bgr(unsigned char *src_img, int width, int height, int scaled_width, int scaled_height)
+{
+    uint8_t *src_data[4] = {0};
+    uint8_t *dst_data[4] = {0};
+    int src_linesize[4] = {0};
+    int dst_linesize[4] = {0};
+    int src_w = width;
+    int src_h = height;
+    int dst_w = scaled_width;
+    int dst_h = scaled_height;
+    enum AVPixelFormat src_pix_fmt = AV_PIX_FMT_YUV420P;
+    enum AVPixelFormat dst_pix_fmt = AV_PIX_FMT_BGR24;
+    struct SwsContext *sws_ctx = NULL;
+
+    // create scaling context
+    sws_ctx = sws_getContext(src_w, src_h, src_pix_fmt,
+                             dst_w, dst_h, dst_pix_fmt,
+                             SWS_BICUBIC, NULL, NULL, NULL);
+    if (!sws_ctx)
+    {
+        std::ostringstream stringStream;
+        stringStream << "Impossible to create scale context for image conversion fmt:"
+                     << av_get_pix_fmt_name(src_pix_fmt) << " s:" << src_w << "x" << src_h
+                     << " -> fmt:" << av_get_pix_fmt_name(dst_pix_fmt) << " s:" << dst_w << "x" << dst_h;
+        errMessage = stringStream.str();
+        return NULL;
+    }
+
+    int srcNumBytes = av_image_fill_arrays(src_data, src_linesize, src_img,
+                                           src_pix_fmt, src_w, src_h, 1);
+    if (srcNumBytes < 0)
+    {
+        std::ostringstream stringStream;
+        stringStream << "Failed to fill image arrays: code " << srcNumBytes;
+        errMessage = stringStream.str();
+        sws_freeContext(sws_ctx);
+        return NULL;
+    }
+
+    int dst_bufsize;
+    if ((dst_bufsize = av_image_alloc(dst_data, dst_linesize,
+                       dst_w, dst_h, dst_pix_fmt, 1)) < 0)
+    {
+        std::ostringstream stringStream;
+        stringStream << "Failed to allocate dst image";
+        errMessage = stringStream.str();
+        sws_freeContext(sws_ctx);
+        return NULL;
+    }
+
+    // convert to destination format
+    sws_scale(sws_ctx, (const uint8_t * const*)src_data,
+              src_linesize, 0, src_h, dst_data, dst_linesize);
+
+    sws_freeContext(sws_ctx);
+    return dst_data[0];
+}
 
 
 const char *alt_detect_err_msg(void)
@@ -94,9 +172,9 @@ static void humanPoseToLines(const std::vector<human_pose_estimation::HumanPose>
 
     for (const auto& pose : poses) {
         alt_detect_obj_t *cur_obj = &alt_detect_result->objs[alt_detect_result->num_objs];
+        cur_obj->score = pose.score;
         if (cur_obj->score < score_threshold)
             continue;
-        cur_obj->score = pose.score;
         cur_obj->lines = new alt_detect_line_t[human_pose_estimation::HumanPoseEstimator::keypointsNumber];
         memset(cur_obj->lines, 0, sizeof(alt_detect_line_t)*human_pose_estimation::HumanPoseEstimator::keypointsNumber);
         cur_obj->num_lines = 0;
@@ -229,46 +307,29 @@ int alt_detect_render_save_yuv420(unsigned char *image, int width, int height,
 }
 
 
-int alt_detect_process_scaled_bgr(unsigned char *image,
-                                  int scaled_width,
-                                  int scaled_height)
-{
-    cv::Mat img(scaled_height, scaled_width, CV_8UC3, image);
-    //save_image_as_png(img, "libopenvinohumanpose.png");
-    try {
-        estimator->estimateAsync(img);
-    }
-    catch (const std::exception &ex) {
-        errMessage = "failed to queue inference: ";
-        errMessage.append(ex.what());
-        return -1;
-    }
-    return 0;
-}
-
-
 // image in YUV420 format
 // return 0 on success
-//int alt_detect_process_yuv420(unsigned char *image, int width, int height)
-//{
-//    cv::Mat img = Yuv420ToBgr(image, width, height);
-//    //save_image_as_png(img, "libopenvinohumanpose.png");
-//    try {
-//        cv::Mat scaledImg = estimator->scaleImage(img);
-//        estimator->estimateAsync(scaledImg);
-//    }
-//    catch (const std::exception &ex) {
-//        errMessage = "failed to queue inference: ";
-//        errMessage.append(ex.what());
-//        return -1;
-//    }
-//    return 0;
-//}
-
-
-void alt_detect_get_input_width_height(int *width, int *height)
+int alt_detect_process_yuv420(unsigned char *image, int width, int height)
 {
-    estimator->getInputWidthHeight(width, height);
+    int ret = -1;
+    int scaled_width = 0;
+    int scaled_height = 0;
+    get_scaled_image_dimensions(width, height, &scaled_width, &scaled_height);
+    unsigned char *scaled_img = scale_yuv2bgr(image, width, height, scaled_width, scaled_height);
+    if (scaled_img) {
+        cv::Mat scaled_mat(scaled_height, scaled_width, CV_8UC3, scaled_img);
+        //save_image_as_png(scaled_mat, "libopenvinohumanpose.png");
+        try {
+            estimator->estimateAsync(scaled_mat);
+            ret = 0;
+        }
+        catch (const std::exception &ex) {
+            errMessage = "failed to queue inference: ";
+            errMessage.append(ex.what());
+        }
+        av_freep(&scaled_img);
+    }
+    return ret;
 }
 
 
@@ -296,8 +357,8 @@ int alt_detect_result_ready(void)
 
 
 // caller frees memory by calling alt_detect_free_results
-int alt_detect_get_result(float score_threshold, int org_width, int org_height,
-                          int scaled_width, int scaled_height,
+int alt_detect_get_result(float score_threshold,
+                          int width, int height,
                           alt_detect_result_t *alt_detect_result)
 {
     if (alt_detect_result == NULL)
@@ -305,7 +366,10 @@ int alt_detect_get_result(float score_threshold, int org_width, int org_height,
 
     try {
         if (estimator->resultIsReady()) {
-            cv::Size orgImageSize(org_width, org_height);
+            int scaled_width = 0;
+            int scaled_height = 0;
+            get_scaled_image_dimensions(width, height, &scaled_width, &scaled_height);
+            cv::Size orgImageSize(width, height);
             cv::Size scaledImageSize(scaled_width, scaled_height);
             std::vector<human_pose_estimation::HumanPose> poses = estimator->getResult(orgImageSize, scaledImageSize);
             alt_detect_free_result(alt_detect_result);
@@ -351,54 +415,58 @@ int alt_detect_init(const char *config_file)
     std::string _modelXmlPath("human-pose-estimation-0001.xml");
     std::string _modelBinPath("human-pose-estimation-0001.bin");
     std::string _targetDeviceName("MYRIAD");
+    int _numDevices = 1;
     struct stat st;
 
     if (estimator)
         return -1;
 
-    // read model XML and BIN and target device from config file
-    if (config_file) {
-        std::ifstream cFile(config_file);
-        if (cFile.is_open()) {
-            std::string line;
-            while (getline(cFile, line)) {
-                line.erase(std::remove_if(line.begin(), line.end(), isspace),
-                                     line.end());
-                if(line[0] == '#' || line.empty())
-                    continue;
-                auto delimiterPos = line.find("=");
-                std::string name = line.substr(0, delimiterPos);
-                std::string value = line.substr(delimiterPos + 1);
-                //std::cout << name << " " << value << '\n';
-                if (name == "MODEL_XML") {
-                    _modelXmlPath = value;
-                } else if (name == "MODEL_BIN") {
-                    _modelBinPath = value;
-                } else if (name == "TARGET_DEVICE") {
-                    _targetDeviceName = value;
-                }
-            }
-        } else {
-            errMessage = "failed to open config file: ";
-            errMessage.append(config_file);
-        }
-        //std::cout << "loaded config file "<< config_file << std::endl;
-    }
-
-    if (stat(_modelXmlPath.c_str(), &st) != 0)
-    {
-        errMessage = "model xml file " + _modelXmlPath + " does not exist";
-        return -1;
-    }
-    if (stat(_modelBinPath.c_str(), &st) != 0)
-    {
-        errMessage = "model bin file " + _modelBinPath + " does not exist";
-        return -1;
-    }
-
     try {
+        // read model XML and BIN and target device from config file
+        if (config_file) {
+            std::ifstream cFile(config_file);
+            if (cFile.is_open()) {
+                std::string line;
+                while (getline(cFile, line)) {
+                    line.erase(std::remove_if(line.begin(), line.end(), isspace),
+                                         line.end());
+                    if(line[0] == '#' || line.empty())
+                        continue;
+                    auto delimiterPos = line.find("=");
+                    std::string name = line.substr(0, delimiterPos);
+                    std::string value = line.substr(delimiterPos + 1);
+                    //std::cout << name << " " << value << '\n';
+                    if (name == "MODEL_XML") {
+                        _modelXmlPath = value;
+                    } else if (name == "MODEL_BIN") {
+                        _modelBinPath = value;
+                    } else if (name == "TARGET_DEVICE") {
+                        _targetDeviceName = value;
+                    } else if (name == "NUM_DEVICES") {
+                        _numDevices = std::stoi(value);
+                    }
+                }
+            } else {
+                errMessage = "failed to open config file: ";
+                errMessage.append(config_file);
+            }
+            //std::cout << "loaded config file "<< config_file << std::endl;
+        }
+
+        if (stat(_modelXmlPath.c_str(), &st) != 0)
+        {
+            errMessage = "model xml file " + _modelXmlPath + " does not exist";
+            return -1;
+        }
+        if (stat(_modelBinPath.c_str(), &st) != 0)
+        {
+            errMessage = "model bin file " + _modelBinPath + " does not exist";
+            return -1;
+        }
+
         estimator = new human_pose_estimation::HumanPoseEstimator(_modelXmlPath, _modelBinPath, _targetDeviceName);
     }
+
     catch (const std::exception &ex) {
         errMessage = "failed to initialize human pose estimator: ";
         errMessage.append(ex.what());

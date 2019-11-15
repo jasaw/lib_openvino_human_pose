@@ -32,7 +32,6 @@ public:
     bool resultIsReady(void);
     void waitResult(void);
     std::vector<HumanPose> getResult(const cv::Size& orgImageSize, const cv::Size& scaledImageSize);
-    cv::Mat scaleImage(const cv::Mat& image);
     ~HumanPoseEstimator();
 
 private:

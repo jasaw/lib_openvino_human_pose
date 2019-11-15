@@ -160,14 +160,6 @@ void HumanPoseEstimator::imageToBuffer(const cv::Mat& scaledImage, uint8_t* buff
 }
 
 
-cv::Mat HumanPoseEstimator::scaleImage(const cv::Mat& image) {
-    cv::Mat scaledImage;
-    double scale = inputLayerSize.height / static_cast<double>(image.rows);
-    cv::resize(image, scaledImage, cv::Size(), scale, scale, cv::INTER_CUBIC);
-    return padImage(scaledImage);
-}
-
-
 cv::Mat HumanPoseEstimator::padImage(const cv::Mat& scaledImage) const {
     cv::Mat paddedImage;
     cv::Size scaledImageSize = scaledImage.size();
@@ -289,20 +281,6 @@ void HumanPoseEstimator::correctCoordinates(std::vector<HumanPose>& poses,
         }
     }
 }
-
-
-//bool HumanPoseEstimator::changeInputWidth(const cv::Size& scaledImageSize) {
-//    bool changed = false;
-//    if (inputLayerSize.height != scaledImageSize.height) {
-//        inputLayerSize.height  = scaledImageSize.height;
-//        changed = true;
-//    }
-//    if (inputLayerSize.width != scaledImageSize.width) {
-//        inputLayerSize.width  = scaledImageSize.width;
-//        changed = true;
-//    }
-//    return changed;
-//}
 
 
 }  // namespace human_pose_estimation
