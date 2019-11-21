@@ -11,14 +11,16 @@
 #include "human_pose_estimator.hpp"
 
 
+
 namespace human_pose_estimation {
 const size_t HumanPoseEstimator::keypointsNumber = 18;
 
-HumanPoseEstimator::HumanPoseEstimator(const std::string& modelXmlPath_,
-                                       const std::string& modelBinPath_,
-                                       const std::string& targetDeviceName_)
-    : requestCount(0),
-      minJointsNumber(3),
+
+HumanPoseEstimator::HumanPoseEstimator(int worker_id_,
+                                       const std::string& modelXmlPath,
+                                       const std::string& modelBinPath,
+                                       const std::string& targetDeviceName)
+    : minJointsNumber(3),
       stride(8),
       meanPixel(cv::Vec3f::all(128)),
       minPeaksDistance(3.0f),
@@ -27,23 +29,43 @@ HumanPoseEstimator::HumanPoseEstimator(const std::string& modelXmlPath_,
       minSubsetScore(0.2f),
       inputLayerSize(-1, -1),
       upsampleRatio(4),
-      targetDeviceName(targetDeviceName_),
-      modelXmlPath(modelXmlPath_),
-      modelBinPath(modelBinPath_) {
+      job_index(0) {
+
+    jobs_mutex = new std::mutex();
+    jobs_cond = new std::condition_variable();
+    worker_id = worker_id_;
+
+    // read model
+    InferenceEngine::CNNNetReader netReader;
     netReader.ReadNetwork(modelXmlPath); // model.xml file
     netReader.ReadWeights(modelBinPath); // model.bin file
+
     network = netReader.getNetwork();
-    InferenceEngine::InputInfo::Ptr inputInfo = network.getInputsInfo().begin()->second;
+    network.setBatchSize(1);
+
+    // prepare input blobs
+    InferenceEngine::InputsDataMap input_data_map = network.getInputsInfo();
+    InferenceEngine::InputInfo::Ptr inputInfo = input_data_map.begin()->second;
+    inputName = input_data_map.begin()->first;
     inputLayerSize = cv::Size(inputInfo->getTensorDesc().getDims()[3], inputInfo->getTensorDesc().getDims()[2]);
     inputInfo->setPrecision(InferenceEngine::Precision::U8);
 
+    // prepare output blobs
     InferenceEngine::OutputsDataMap outputInfo = network.getOutputsInfo();
     auto outputBlobsIt = outputInfo.begin();
     pafsBlobName = outputBlobsIt->first;
     heatmapsBlobName = (++outputBlobsIt)->first;
 
-    executableNetwork = ie.LoadNetwork(network, targetDeviceName);
-    request = executableNetwork.CreateInferRequest();
+    // load network to device
+    std::cout << "estimator " << worker_id << " targetDeviceName : " << targetDeviceName << std::endl;
+    executableNetwork = ie.LoadNetwork(network, targetDeviceName, { });
+
+    // create infer requests
+    for (int i = 0; i < INFER_QUEUE_SIZE; i++) {
+        async_infer_request[i] = executableNetwork.CreateInferRequest();
+        set_notify_on_job_completion(&async_infer_request[i]);
+        the_job[i] = NULL;
+    }
 }
 
 
@@ -57,47 +79,92 @@ void HumanPoseEstimator::getInputWidthHeight(int *width, int *height) {
 }
 
 
-bool HumanPoseEstimator::queueIsEmpty(void) {
-    if (requestCount > 0)
+int HumanPoseEstimator::get_worker_id(void) {
+    return worker_id;
+}
+
+
+void HumanPoseEstimator::set_notify_on_job_completion(InferenceEngine::InferRequest *request) const {
+    request->SetCompletionCallback(
+        [&] {
+                std::cout << "estimator " << worker_id << " callback : Inference Completed" << std::endl;
+                //jobs_cond->notify_all();
+                //std::cout << "estimator " << worker_id << " callback : notified" << std::endl;
+            }
+        );
+}
+
+
+bool HumanPoseEstimator::queue_not_full(void) {
+    std::unique_lock<std::mutex> mlock(*jobs_mutex);
+    return get_next_empty_job_index() >= 0;
+}
+
+
+int HumanPoseEstimator::queue_available_size(void) {
+    int cnt = 0;
+    std::unique_lock<std::mutex> mlock(*jobs_mutex);
+    for (int i = 0; i < INFER_QUEUE_SIZE; i++) {
+        if ((the_job[i] == NULL) || (!the_job[i]->is_valid()))
+            cnt++;
+    }
+    return cnt;
+}
+
+
+int HumanPoseEstimator::get_next_empty_job_index(void) {
+    int tmp_index = job_index;
+    for (int i = 0; i < INFER_QUEUE_SIZE; i++) {
+        if ((the_job[i] == NULL) || (!the_job[tmp_index]->is_valid()))
+            return tmp_index;
+        tmp_index++;
+        if (tmp_index >= INFER_QUEUE_SIZE)
+            tmp_index = 0;
+    }
+    return -1;
+}
+
+
+// return id negative means no inference result
+bool HumanPoseEstimator::estimateAsync(job::Job *new_job) {
+    if (!new_job->is_valid())
         return false;
+
+    int next_job_index = get_next_empty_job_index();
+    if (next_job_index < 0) // queue full
+        return false;
+
+    {
+        std::unique_lock<std::mutex> mlock(*jobs_mutex);
+        the_job[next_job_index] = new_job;
+    }
+    cv::Mat paddedImage = padImage(the_job[next_job_index]->scaledImage);
+    InferenceEngine::Blob::Ptr input = async_infer_request[next_job_index].GetBlob(inputName);
+    auto buffer = input->buffer().as<InferenceEngine::PrecisionTrait<InferenceEngine::Precision::U8>::value_type *>();
+    imageToBuffer(paddedImage, buffer);
+
+    std::cout << "estimator " << worker_id << " : Start async inference" << std::endl;
+    async_infer_request[next_job_index].StartAsync();
     return true;
 }
 
 
-bool HumanPoseEstimator::resultIsReady(void) {
-    if (requestCount < 1)
-        return false;
-    InferenceEngine::StatusCode state = request.Wait(InferenceEngine::IInferRequest::WaitMode::STATUS_ONLY);
+bool HumanPoseEstimator::current_job_is_done(void) {
+    InferenceEngine::StatusCode state = async_infer_request[job_index].Wait(InferenceEngine::IInferRequest::WaitMode::STATUS_ONLY);
+    std::cout << "estimator " << worker_id << " : current job status is " << state << std::endl;
     return (InferenceEngine::StatusCode::OK == state);
 }
 
 
-void HumanPoseEstimator::waitResult(void) {
-    request.Wait(InferenceEngine::IInferRequest::WaitMode::RESULT_READY);
-}
-
-
-std::vector<HumanPose> HumanPoseEstimator::estimate(const cv::Mat& scaledImage, const cv::Size& orgImageSize) {
-    if (requestCount > 0) {
-        std::vector<HumanPose> poses;
-        return poses;
-    }
-    requestCount++;
-
-    auto scaledImageSize = scaledImage.size();
-    InferenceEngine::Blob::Ptr input = request.GetBlob(network.getInputsInfo().begin()->first);
-    auto buffer = input->buffer().as<InferenceEngine::PrecisionTrait<InferenceEngine::Precision::U8>::value_type *>();
-    cv::Mat paddedImage = padImage(scaledImage);
-    imageToBuffer(paddedImage, buffer);
-
-    request.Infer();
-
-    InferenceEngine::Blob::Ptr pafsBlob = request.GetBlob(pafsBlobName);
-    InferenceEngine::Blob::Ptr heatMapsBlob = request.GetBlob(heatmapsBlobName);
+std::vector<human_pose_estimation::HumanPose> HumanPoseEstimator::getPoses(InferenceEngine::InferRequest *request,
+                                                                           const cv::Size& orgImageSize,
+                                                                           const cv::Size& scaledImageSize) const {
+    InferenceEngine::Blob::Ptr pafsBlob = request->GetBlob(pafsBlobName);
+    InferenceEngine::Blob::Ptr heatMapsBlob = request->GetBlob(heatmapsBlobName);
     CV_Assert(heatMapsBlob->getTensorDesc().getDims()[1] == keypointsNumber + 1);
     InferenceEngine::SizeVector heatMapDims =
             heatMapsBlob->getTensorDesc().getDims();
-    std::vector<HumanPose> poses = postprocess(
+    std::vector<human_pose_estimation::HumanPose> poses = postprocess(
             heatMapsBlob->buffer(),
             heatMapDims[2] * heatMapDims[3],
             keypointsNumber,
@@ -106,47 +173,38 @@ std::vector<HumanPose> HumanPoseEstimator::estimate(const cv::Mat& scaledImage, 
             pafsBlob->getTensorDesc().getDims()[1],
             heatMapDims[3], heatMapDims[2], orgImageSize, scaledImageSize);
 
-    requestCount--;
-
     return poses;
 }
 
 
-void HumanPoseEstimator::estimateAsync(const cv::Mat& scaledImage) {
-    if (requestCount > 0)
-        return;
-    requestCount++;
+std::pair<int, std::vector<human_pose_estimation::HumanPose>> HumanPoseEstimator::getResult(void) {
+    std::vector<human_pose_estimation::HumanPose> poses;
+    int id = job::Job::invalid_job_id;
 
-    cv::Mat paddedImage = padImage(scaledImage);
-    InferenceEngine::Blob::Ptr input = request.GetBlob(network.getInputsInfo().begin()->first);
-    auto buffer = input->buffer().as<InferenceEngine::PrecisionTrait<InferenceEngine::Precision::U8>::value_type *>();
-    imageToBuffer(paddedImage, buffer);
+    std::unique_lock<std::mutex> mlock(*jobs_mutex);
+    if (current_job_is_done()) {
 
-    request.StartAsync();
-}
+        std::cout << "estimator " << worker_id << " : Inference job completed, calling wait" << std::endl;
 
+        if (InferenceEngine::StatusCode::OK == async_infer_request[job_index].Wait(InferenceEngine::IInferRequest::WaitMode::RESULT_READY)) {
 
-std::vector<HumanPose> HumanPoseEstimator::getResult(const cv::Size& orgImageSize, const cv::Size& scaledImageSize) {
-    if (requestCount < 1) {
-        std::vector<HumanPose> poses;
-        return poses;
+            std::cout << "estimator " << worker_id << " : Getting results" << std::endl;
+
+            cv::Size scaledImageSize = the_job[job_index]->scaledImage.size();
+            poses = getPoses(&async_infer_request[job_index],
+                             the_job[job_index]->fullImageSize,
+                             scaledImageSize);
+            id = the_job[job_index]->id;
+            delete the_job[job_index];
+            the_job[job_index] = NULL;
+            job_index++;
+            if (job_index >= INFER_QUEUE_SIZE)
+                job_index = 0;
+        }
     }
-    waitResult();
-    InferenceEngine::Blob::Ptr pafsBlob = request.GetBlob(pafsBlobName);
-    InferenceEngine::Blob::Ptr heatMapsBlob = request.GetBlob(heatmapsBlobName);
-    CV_Assert(heatMapsBlob->getTensorDesc().getDims()[1] == keypointsNumber + 1);
-    InferenceEngine::SizeVector heatMapDims =
-            heatMapsBlob->getTensorDesc().getDims();
-    std::vector<HumanPose> poses = postprocess(
-            heatMapsBlob->buffer(),
-            heatMapDims[2] * heatMapDims[3],
-            keypointsNumber,
-            pafsBlob->buffer(),
-            heatMapDims[2] * heatMapDims[3],
-            pafsBlob->getTensorDesc().getDims()[1],
-            heatMapDims[3], heatMapDims[2], orgImageSize, scaledImageSize);
-    requestCount--;
-    return poses;
+    mlock.unlock();
+
+    return std::make_pair(id, poses);
 }
 
 
@@ -175,7 +233,7 @@ cv::Mat HumanPoseEstimator::padImage(const cv::Mat& scaledImage) const {
 }
 
 
-std::vector<HumanPose> HumanPoseEstimator::postprocess(
+std::vector<human_pose_estimation::HumanPose> HumanPoseEstimator::postprocess(
         const float* heatMapsData, const int heatMapOffset, const int nHeatMaps,
         const float* pafsData, const int pafOffset, const int nPafs,
         const int featureMapWidth, const int featureMapHeight,
@@ -198,7 +256,7 @@ std::vector<HumanPose> HumanPoseEstimator::postprocess(
     }
     resizeFeatureMaps(pafs);
 
-    std::vector<HumanPose> poses = extractPoses(heatMaps, pafs);
+    std::vector<human_pose_estimation::HumanPose> poses = extractPoses(heatMaps, pafs);
     correctCoordinates(poses, heatMaps[0].size(), imageSize, scaledImageSize);
     return poses;
 }
@@ -223,7 +281,7 @@ private:
     std::vector<std::vector<Peak> >& peaksFromHeatMap;
 };
 
-std::vector<HumanPose> HumanPoseEstimator::extractPoses(
+std::vector<human_pose_estimation::HumanPose> HumanPoseEstimator::extractPoses(
         const std::vector<cv::Mat>& heatMaps,
         const std::vector<cv::Mat>& pafs) const {
     std::vector<std::vector<Peak> > peaksFromHeatMap(heatMaps.size());
@@ -237,7 +295,7 @@ std::vector<HumanPose> HumanPoseEstimator::extractPoses(
             peak.id += peaksBefore;
         }
     }
-    std::vector<HumanPose> poses = groupPeaksToPoses(
+    std::vector<human_pose_estimation::HumanPose> poses = groupPeaksToPoses(
                 peaksFromHeatMap, pafs, keypointsNumber, midPointsScoreThreshold,
                 foundMidPointsRatioThreshold, minJointsNumber, minSubsetScore);
     return poses;
@@ -250,7 +308,7 @@ void HumanPoseEstimator::resizeFeatureMaps(std::vector<cv::Mat>& featureMaps) co
     }
 }
 
-void HumanPoseEstimator::correctCoordinates(std::vector<HumanPose>& poses,
+void HumanPoseEstimator::correctCoordinates(std::vector<human_pose_estimation::HumanPose>& poses,
                                             const cv::Size& featureMapsSize,
                                             const cv::Size& imageSize,
                                             const cv::Size& scaledImageSize) const {
@@ -281,6 +339,12 @@ void HumanPoseEstimator::correctCoordinates(std::vector<HumanPose>& poses,
         }
     }
 }
+
+
+
+
+
+
 
 
 }  // namespace human_pose_estimation

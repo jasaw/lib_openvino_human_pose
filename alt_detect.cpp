@@ -13,97 +13,20 @@
 #include <iostream>
 #include <fstream>
 #include <algorithm>
-#include <map>
+//#include <map>
 #include <sys/stat.h>
-extern "C" {
-#include <libavutil/imgutils.h>
-#include <libavutil/parseutils.h>
-#include <libswscale/swscale.h>
-}
 #include <opencv2/opencv.hpp>
-#include "human_pose_estimator.hpp"
+//#include "human_pose_estimator.hpp"
+#include "scheduler.hpp"
+#include "log.hpp"
 #include "alt_detect.h"
 
-static human_pose_estimation::HumanPoseEstimator *estimator = NULL;
-static std::string errMessage;
-
-
-static void get_scaled_image_dimensions(int width, int height, int *scaled_width, int *scaled_height)
-{
-    int input_height = 0;
-    int input_width  = 0;
-    estimator->getInputWidthHeight(&input_width, &input_height);
-    double scale_h = (double)input_height / height;
-    double scale_w = (double)input_width  / width;
-    double scale   = MIN(scale_h, scale_w);
-    *scaled_width  = (int)(width * scale);
-    *scaled_height = (int)(height * scale);
-}
-
-
-// caller must av_freep returned image
-static unsigned char *scale_yuv2bgr(unsigned char *src_img, int width, int height, int scaled_width, int scaled_height)
-{
-    uint8_t *src_data[4] = {0};
-    uint8_t *dst_data[4] = {0};
-    int src_linesize[4] = {0};
-    int dst_linesize[4] = {0};
-    int src_w = width;
-    int src_h = height;
-    int dst_w = scaled_width;
-    int dst_h = scaled_height;
-    enum AVPixelFormat src_pix_fmt = AV_PIX_FMT_YUV420P;
-    enum AVPixelFormat dst_pix_fmt = AV_PIX_FMT_BGR24;
-    struct SwsContext *sws_ctx = NULL;
-
-    // create scaling context
-    sws_ctx = sws_getContext(src_w, src_h, src_pix_fmt,
-                             dst_w, dst_h, dst_pix_fmt,
-                             SWS_BICUBIC, NULL, NULL, NULL);
-    if (!sws_ctx)
-    {
-        std::ostringstream stringStream;
-        stringStream << "Impossible to create scale context for image conversion fmt:"
-                     << av_get_pix_fmt_name(src_pix_fmt) << " s:" << src_w << "x" << src_h
-                     << " -> fmt:" << av_get_pix_fmt_name(dst_pix_fmt) << " s:" << dst_w << "x" << dst_h;
-        errMessage = stringStream.str();
-        return NULL;
-    }
-
-    int srcNumBytes = av_image_fill_arrays(src_data, src_linesize, src_img,
-                                           src_pix_fmt, src_w, src_h, 1);
-    if (srcNumBytes < 0)
-    {
-        std::ostringstream stringStream;
-        stringStream << "Failed to fill image arrays: code " << srcNumBytes;
-        errMessage = stringStream.str();
-        sws_freeContext(sws_ctx);
-        return NULL;
-    }
-
-    int dst_bufsize;
-    if ((dst_bufsize = av_image_alloc(dst_data, dst_linesize,
-                       dst_w, dst_h, dst_pix_fmt, 1)) < 0)
-    {
-        std::ostringstream stringStream;
-        stringStream << "Failed to allocate dst image";
-        errMessage = stringStream.str();
-        sws_freeContext(sws_ctx);
-        return NULL;
-    }
-
-    // convert to destination format
-    sws_scale(sws_ctx, (const uint8_t * const*)src_data,
-              src_linesize, 0, src_h, dst_data, dst_linesize);
-
-    sws_freeContext(sws_ctx);
-    return dst_data[0];
-}
+static scheduler::Scheduler *sched = NULL;
 
 
 const char *alt_detect_err_msg(void)
 {
-    return errMessage.c_str();
+    return log_err_msg();
 }
 
 
@@ -309,78 +232,31 @@ int alt_detect_render_save_yuv420(unsigned char *image, int width, int height,
 
 // image in YUV420 format
 // return 0 on success
-int alt_detect_process_yuv420(unsigned char *image, int width, int height)
+int alt_detect_process_yuv420(int id, unsigned char *image, int width, int height)
 {
-    int ret = -1;
-    int scaled_width = 0;
-    int scaled_height = 0;
-    get_scaled_image_dimensions(width, height, &scaled_width, &scaled_height);
-    unsigned char *scaled_img = scale_yuv2bgr(image, width, height, scaled_width, scaled_height);
-    if (scaled_img) {
-        cv::Mat scaled_mat(scaled_height, scaled_width, CV_8UC3, scaled_img);
-        //save_image_as_png(scaled_mat, "libopenvinohumanpose.png");
-        try {
-            estimator->estimateAsync(scaled_mat);
-            ret = 0;
-        }
-        catch (const std::exception &ex) {
-            errMessage = "failed to queue inference: ";
-            errMessage.append(ex.what());
-        }
-        av_freep(&scaled_img);
-    }
-    return ret;
+    if (sched->queueJob(id, image, width, height))
+        return 0;
+    return -1;
 }
 
 
-int alt_detect_queue_empty(void)
+int alt_detect_result_ready(int id)
 {
-    if (estimator->queueIsEmpty())
+    if (sched->resultIsReady(id))
         return 1;
     return 0;
 }
 
 
-int alt_detect_result_ready(void)
-{
-    try {
-        if (estimator->resultIsReady())
-            return 1;
-    }
-    catch (const std::exception &ex) {
-        errMessage = "failed to get inference result status: ";
-        errMessage.append(ex.what());
-        return -1;
-    }
-    return 0;
-}
-
-
 // caller frees memory by calling alt_detect_free_results
-int alt_detect_get_result(float score_threshold,
-                          int width, int height,
+int alt_detect_get_result(int id, float score_threshold,
                           alt_detect_result_t *alt_detect_result)
 {
     if (alt_detect_result == NULL)
         return -1;
-
-    try {
-        if (estimator->resultIsReady()) {
-            int scaled_width = 0;
-            int scaled_height = 0;
-            get_scaled_image_dimensions(width, height, &scaled_width, &scaled_height);
-            cv::Size orgImageSize(width, height);
-            cv::Size scaledImageSize(scaled_width, scaled_height);
-            std::vector<human_pose_estimation::HumanPose> poses = estimator->getResult(orgImageSize, scaledImageSize);
-            alt_detect_free_result(alt_detect_result);
-            humanPoseToLines(poses, score_threshold, alt_detect_result);
-        }
-    }
-    catch (const std::exception &ex) {
-        errMessage = "failed to get inference result: ";
-        errMessage.append(ex.what());
-        return -1;
-    }
+    std::vector<human_pose_estimation::HumanPose> poses = sched->getResult(id);
+    alt_detect_free_result(alt_detect_result);
+    humanPoseToLines(poses, score_threshold, alt_detect_result);
     return alt_detect_result->num_objs;
 }
 
@@ -415,10 +291,10 @@ int alt_detect_init(const char *config_file)
     std::string _modelXmlPath("human-pose-estimation-0001.xml");
     std::string _modelBinPath("human-pose-estimation-0001.bin");
     std::string _targetDeviceName("MYRIAD");
-    int _numDevices = 1;
+    int _numDevices = 0; // zero means use all available inference devices
     struct stat st;
 
-    if (estimator)
+    if (sched)
         return -1;
 
     try {
@@ -464,11 +340,11 @@ int alt_detect_init(const char *config_file)
             return -1;
         }
 
-        estimator = new human_pose_estimation::HumanPoseEstimator(_modelXmlPath, _modelBinPath, _targetDeviceName);
+        sched = new scheduler::Scheduler(_numDevices, _modelXmlPath, _modelBinPath, _targetDeviceName);
     }
 
     catch (const std::exception &ex) {
-        errMessage = "failed to initialize human pose estimator: ";
+        errMessage = "failed to initialize scheduler for human pose estimator: ";
         errMessage.append(ex.what());
         return -1;
     }
@@ -478,9 +354,9 @@ int alt_detect_init(const char *config_file)
 
 void alt_detect_uninit(void)
 {
-    if (estimator)
+    if (sched)
     {
-        delete estimator;
-        estimator = NULL;
+        delete sched;
+        sched = NULL;
     }
 }
