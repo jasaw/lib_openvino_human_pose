@@ -10,6 +10,14 @@
 #include "peak.hpp"
 #include "human_pose_estimator.hpp"
 
+#include <opencv2/opencv.hpp>
+
+//#include <ie_device.hpp>
+//#include <ie_plugin_config.hpp>
+//#include <ie_plugin_dispatcher.hpp>
+//#include <ie_plugin_ptr.hpp>
+////#include <ie_plugin_cpp.hpp>
+//#include <ie_extension.h>
 
 
 namespace human_pose_estimation {
@@ -35,6 +43,26 @@ HumanPoseEstimator::HumanPoseEstimator(int worker_id_,
     jobs_cond = new std::condition_variable();
     worker_id = worker_id_;
 
+    //int numDevices = 0; // TODO: take this from constructor parameter
+
+    //// get ALL inference devices
+    //std::string allDevices = "MULTI:";
+    //std::vector<std::string> availableDevices = ie.GetAvailableDevices();
+    //if ((numDevices <= 0) || ((int)availableDevices.size() < numDevices))
+    //    numDevices = availableDevices.size();
+    //
+    //// Debug only
+    //std::cout << "Available devices: " << std::endl;
+    //for (auto && device : availableDevices) {
+    //    std::cout << "\tDevice: " << device << std::endl;
+    //    allDevices += device;
+    //    allDevices += ((device == availableDevices[availableDevices.size()-1]) ? "" : ",");
+    //}
+
+    //InferenceEngine::PluginDispatcher dispatcher({""});
+    //InferenceEngine::InferenceEnginePluginPtr _plugin(dispatcher.getPluginByDevice("MYRIAD"));
+    //InferenceEngine::InferencePlugin plugin(_plugin);
+
     // read model
     InferenceEngine::CNNNetReader netReader;
     netReader.ReadNetwork(modelXmlPath); // model.xml file
@@ -57,19 +85,29 @@ HumanPoseEstimator::HumanPoseEstimator(int worker_id_,
     heatmapsBlobName = (++outputBlobsIt)->first;
 
     // load network to device
-    std::cout << "estimator " << worker_id << " targetDeviceName : " << targetDeviceName << std::endl;
-    executableNetwork = ie.LoadNetwork(network, targetDeviceName, { });
+    executableNetwork = ie.LoadNetwork(network, targetDeviceName, {});
+    //for (int i = 0; i < 2; i++) {
+    //    std::cout << "estimator " << worker_id << " targetDeviceName : " << availableDevices.at(i) << std::endl;
+    //    //executableNetwork[i] = plugin.LoadNetwork(network, {});
+    //    executableNetwork[i] = ie.LoadNetwork(network, availableDevices.at(i), {});
+    //    //executableNetwork[i] = ie.LoadNetwork(network, availableDevices.at(i), {{"VPU_FORCE_RESET", "NO"}});
+    //}
 
     // create infer requests
     for (int i = 0; i < INFER_QUEUE_SIZE; i++) {
         async_infer_request[i] = executableNetwork.CreateInferRequest();
-        set_notify_on_job_completion(&async_infer_request[i]);
+        //set_notify_on_job_completion(&async_infer_request[i]);
         the_job[i] = NULL;
     }
 }
 
 
 HumanPoseEstimator::~HumanPoseEstimator() {
+    std::cout << "estimator " << worker_id << " destructor called" << std::endl;
+    delete jobs_mutex;
+    jobs_mutex = NULL;
+    delete jobs_cond;
+    jobs_cond = NULL;
 }
 
 
@@ -127,6 +165,7 @@ int HumanPoseEstimator::get_next_empty_job_index(void) {
 
 // return id negative means no inference result
 bool HumanPoseEstimator::estimateAsync(job::Job *new_job) {
+    //std::unique_lock<std::mutex> mlock(*jobs_mutex);
     if (!new_job->is_valid())
         return false;
 
@@ -143,7 +182,7 @@ bool HumanPoseEstimator::estimateAsync(job::Job *new_job) {
     auto buffer = input->buffer().as<InferenceEngine::PrecisionTrait<InferenceEngine::Precision::U8>::value_type *>();
     imageToBuffer(paddedImage, buffer);
 
-    std::cout << "estimator " << worker_id << " : Start async inference" << std::endl;
+    std::cout << "estimator " << worker_id << " : Start async inference, job index " << next_job_index << std::endl;
     async_infer_request[next_job_index].StartAsync();
     return true;
 }
@@ -151,7 +190,7 @@ bool HumanPoseEstimator::estimateAsync(job::Job *new_job) {
 
 bool HumanPoseEstimator::current_job_is_done(void) {
     InferenceEngine::StatusCode state = async_infer_request[job_index].Wait(InferenceEngine::IInferRequest::WaitMode::STATUS_ONLY);
-    std::cout << "estimator " << worker_id << " : current job status is " << state << std::endl;
+    std::cout << "estimator " << worker_id << " : job index " << job_index << " status is " << state << std::endl;
     return (InferenceEngine::StatusCode::OK == state);
 }
 
@@ -184,11 +223,11 @@ std::pair<int, std::vector<human_pose_estimation::HumanPose>> HumanPoseEstimator
     std::unique_lock<std::mutex> mlock(*jobs_mutex);
     if (current_job_is_done()) {
 
-        std::cout << "estimator " << worker_id << " : Inference job completed, calling wait" << std::endl;
+        std::cout << "estimator " << worker_id << " : Inference job index " << job_index << " completed, calling wait" << std::endl;
 
         if (InferenceEngine::StatusCode::OK == async_infer_request[job_index].Wait(InferenceEngine::IInferRequest::WaitMode::RESULT_READY)) {
 
-            std::cout << "estimator " << worker_id << " : Getting results" << std::endl;
+            std::cout << "estimator " << worker_id << " : Getting results from job index " << job_index << std::endl;
 
             cv::Size scaledImageSize = the_job[job_index]->scaledImage.size();
             poses = getPoses(&async_infer_request[job_index],

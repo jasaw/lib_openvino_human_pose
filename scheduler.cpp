@@ -172,10 +172,10 @@ Scheduler::Scheduler(int numDevices,
     }
 
     for (int i = 0; i < numDevices; i++) {
-        workers.push_back(human_pose_estimation::HumanPoseEstimator(i,
-                                                                    modelXmlPath,
-                                                                    modelBinPath,
-                                                                    availableDevices.at(i)));
+        workers.push_back(new human_pose_estimation::HumanPoseEstimator(i,
+                                                                        modelXmlPath,
+                                                                        modelBinPath,
+                                                                        availableDevices.at(i)));
     }
 
     for (auto& worker : this->workers) {
@@ -184,7 +184,7 @@ Scheduler::Scheduler(int numDevices,
                                       std::ref(this->results_mutex),
                                       std::ref(this->results_cond),
                                       std::ref(this->terminated),
-                                      &worker));
+                                      worker));
     }
 }
 
@@ -193,10 +193,12 @@ Scheduler::~Scheduler() {
     terminate();
     // need to notify everybody ???
     for (auto& worker : this->workers) {
-        worker.jobs_cond->notify_all();
+        worker->jobs_cond->notify_all();
     }
     results_cond.notify_all();
     joinThreads();
+    for (auto& worker : this->workers)
+        delete worker;
 }
 
 
@@ -229,7 +231,7 @@ std::vector<human_pose_estimation::HumanPose> Scheduler::getResult(int id)
     std::map<int, std::queue<std::vector<human_pose_estimation::HumanPose>>>::iterator it;
     it = results.find(id);
     if (it != results.end()) {
-        std::vector<human_pose_estimation::HumanPose> poses = it->second.front();
+        poses = it->second.front();
         it->second.pop();
         if (it->second.empty())
             results.erase(id);
@@ -252,23 +254,26 @@ bool Scheduler::queueJob(int id, unsigned char *image, int width, int height)
         // find which worker has the most empty queue worker.space queue_available_size()
         int max_queue_size = 0;
         for (auto& worker : this->workers) {
-            int q_size = worker.queue_available_size();
+            int q_size = worker->queue_available_size();
             if (q_size > max_queue_size) {
                 max_queue_size = q_size;
-                nominated_worker = &worker;
+                nominated_worker = worker;
             }
         }
     } else {
         // mode 2: push job to worker with matchin ID
         for (auto& worker : this->workers) {
-            if (worker.get_worker_id() == id) {
-                nominated_worker = &worker;
+            if (worker->get_worker_id() == id) {
+                nominated_worker = worker;
                 break;
             }
         }
     }
 
     if (nominated_worker) {
+
+        std::cout << "found nominated worker" << std::endl;
+
         int scaled_width = 0;
         int scaled_height = 0;
         get_scaled_image_dimensions(nominated_worker, width, height, &scaled_width, &scaled_height);
@@ -276,6 +281,7 @@ bool Scheduler::queueJob(int id, unsigned char *image, int width, int height)
         if (scaled_img) {
             try {
                 job::Job *new_job = new job::Job(id, width, height, scaled_width, scaled_height, scaled_img);
+        std::cout << "calling nominated_worker->estimateAsync" << std::endl;
                 ret = nominated_worker->estimateAsync(new_job);
             }
             catch (const std::exception &ex) {

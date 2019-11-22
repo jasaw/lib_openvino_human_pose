@@ -45,7 +45,7 @@ public:
 private:
     InferenceEngine::Core ie;
     InferenceEngine::CNNNetwork network;
-    std::vector<human_pose_estimation::HumanPoseEstimator> workers;
+    std::vector<human_pose_estimation::HumanPoseEstimator *> workers;
     std::queue<job::Job> jobs;
     std::map<int, std::queue<std::vector<human_pose_estimation::HumanPose>>> results;
     std::vector<std::thread> threads;

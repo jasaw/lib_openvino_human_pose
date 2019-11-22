@@ -33,7 +33,7 @@ typedef struct
     void (*alt_detect_uninit)();
     int (*alt_detect_process_yuv420)(int, unsigned char *, int, int);
     int (*alt_detect_result_ready)(int);
-    int (*alt_detect_get_result)(int, float, int, int, alt_detect_result_t *);
+    int (*alt_detect_get_result)(int, float, alt_detect_result_t *);
     void (*alt_detect_free_result)(alt_detect_result_t *);
     const char *(*alt_detect_err_msg)(void);
     int (*alt_detect_save_yuv420)(unsigned char *, int, int, const char *);
@@ -110,23 +110,20 @@ static inline void clip_pos_to_image_size(int *xpos, int *ypos, int width, int h
 }
 
 
-static void overlay_result_on_image(lib_detect_info *libdetect,
-                                    unsigned char *yuv_image,
+static void overlay_result_on_image(unsigned char *yuv_image,
                                     int width,
                                     int height,
                                     alt_detect_result_t *alt_detect_result)
 {
-    //libdetect->alt_detect_render_save_yuv420(yuv_image, width, height, alt_detect_result, "out.png");
-
     for (int i = 0; i < alt_detect_result->num_objs; i++) {
         alt_detect_obj_t *cur_obj = &alt_detect_result->objs[i];
         printf("Object %d score: %f\n", i+1, cur_obj->score);
         for (int j = 0; j < cur_obj->num_lines; j++) {
             alt_detect_line_t *cur_line = &cur_obj->lines[j];
 
-            printf("\t%2d:(%d, %d) --- %2d:(%d, %d)\n",
-                   cur_line->p[0].id, cur_line->p[0].x, cur_line->p[0].y,
-                   cur_line->p[1].id, cur_line->p[1].x, cur_line->p[1].y);
+            //printf("\t%2d:(%d, %d) --- %2d:(%d, %d)\n",
+            //       cur_line->p[0].id, cur_line->p[0].x, cur_line->p[0].y,
+            //       cur_line->p[1].id, cur_line->p[1].x, cur_line->p[1].y);
 
             // colour
             unsigned char colour_y = 0;
@@ -195,8 +192,6 @@ static void overlay_result_on_image(lib_detect_info *libdetect,
             }
         }
     }
-
-    libdetect->alt_detect_save_yuv420(yuv_image, width, height, "out.png");
 }
 
 
@@ -301,7 +296,7 @@ int main(int argc, char *argv[])
     alt_detect_result_t alt_detect_result;
     memset(&alt_detect_result, 0, sizeof(alt_detect_result));
 
-    int id = 0;
+    float score_threshold = 0;
     unsigned char *output_buffer = NULL;
     int width = 0;
     int height = 0;
@@ -340,23 +335,44 @@ int main(int argc, char *argv[])
     }
 
     printf("process image\n");
-    if (libdetect.alt_detect_process_yuv420(id, yuv_image, width, height))
-    {
-        const char *errmsg = libdetect.alt_detect_err_msg();
-        fprintf(stderr, "Error: %s\n", errmsg);
-        ret = -1;
-    }
-    else
+    for (int id = 0; id < 2; id++)
+        libdetect.alt_detect_process_yuv420(id, yuv_image, width, height);
+    //if (libdetect.alt_detect_process_yuv420(id, yuv_image, width, height))
+    //{
+    //    const char *errmsg = libdetect.alt_detect_err_msg();
+    //    fprintf(stderr, "Error: %s\n", errmsg);
+    //    ret = -1;
+    //}
+    //else
     {
         printf("wait for result ...\n");
-        while (!libdetect.alt_detect_result_ready(id)) {
+        while (1) {
+            int alldone = 1;
+            for (int id = 0; id < 2; id++)
+                alldone &= libdetect.alt_detect_result_ready(id);
+            if (alldone)
+                break;
             sleep(1);
-            printf("wait for result ...\n");
+            printf("wait for results ...\n");
         }
+        //while (!libdetect.alt_detect_result_ready(id)) {
+        //    sleep(1);
+        //    printf("wait for result ...\n");
+        //}
         printf("result ready\n");
 
+        printf("get results\n");
+        for (int id = 0; id < 2; id++) {
+            if (libdetect.alt_detect_get_result(id, score_threshold, &alt_detect_result) >= 0) {
+                printf("overlay result %d on image\n", id);
+                overlay_result_on_image(yuv_image, width, height, &alt_detect_result);
+                //libdetect->alt_detect_save_yuv420(yuv_image, width, height, "out.png");
+            }
+        }
+
+        /*
         printf("get result\n");
-        if (libdetect.alt_detect_get_result(id, 0, width, height, &alt_detect_result) < 0)
+        if (libdetect.alt_detect_get_result(id, score_threshold, &alt_detect_result) < 0)
         {
             const char *errmsg = libdetect.alt_detect_err_msg();
             fprintf(stderr, "Error: %s\n", errmsg);
@@ -364,7 +380,9 @@ int main(int argc, char *argv[])
 
         // overlay result on image
         printf("overlay result on image\n");
-        overlay_result_on_image(&libdetect, yuv_image, width, height, &alt_detect_result);
+        overlay_result_on_image(yuv_image, width, height, &alt_detect_result);
+        //libdetect->alt_detect_save_yuv420(yuv_image, width, height, "out.png");
+        */
 
         printf("free result\n");
         libdetect.alt_detect_free_result(&alt_detect_result);
