@@ -16,12 +16,12 @@
 //#include <map>
 #include <sys/stat.h>
 #include <opencv2/opencv.hpp>
-//#include "human_pose_estimator.hpp"
-#include "scheduler.hpp"
+#include "human_pose_estimator.hpp"
+//#include "scheduler.hpp"
 #include "log.hpp"
 #include "alt_detect.h"
 
-static scheduler::Scheduler *sched = NULL;
+static human_pose_estimation::HumanPoseEstimator *sched = NULL;
 
 
 const char *alt_detect_err_msg(void)
@@ -243,6 +243,7 @@ int alt_detect_process_yuv420(int id, unsigned char *image, int width, int heigh
 int alt_detect_result_ready(int id)
 {
     if (sched->resultIsReady(id))
+    //if (sched->current_job_is_done(id))
         return 1;
     return 0;
 }
@@ -340,7 +341,7 @@ int alt_detect_init(const char *config_file)
             return -1;
         }
 
-        sched = new scheduler::Scheduler(_numDevices, _modelXmlPath, _modelBinPath, _targetDeviceName);
+        sched = new human_pose_estimation::HumanPoseEstimator(_numDevices, _modelXmlPath, _modelBinPath, _targetDeviceName);
     }
 
     catch (const std::exception &ex) {

@@ -23,6 +23,7 @@
 #include "human_pose.hpp"
 #include "human_pose_estimator.hpp"
 
+#if 0
 namespace scheduler {
 
 class Scheduler{
@@ -55,3 +56,5 @@ private:
 };
 
 }  // namespace scheduler
+
+#endif // 0

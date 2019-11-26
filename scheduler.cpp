@@ -18,7 +18,7 @@ extern "C" {
 #include "log.hpp"
 #include "scheduler.hpp"
 
-
+#if 0
 namespace scheduler {
 
 static void get_scaled_image_dimensions(human_pose_estimation::HumanPoseEstimator *estimator,
@@ -272,7 +272,7 @@ bool Scheduler::queueJob(int id, unsigned char *image, int width, int height)
 
     if (nominated_worker) {
 
-        std::cout << "found nominated worker" << std::endl;
+        //std::cout << "found nominated worker" << std::endl;
 
         int scaled_width = 0;
         int scaled_height = 0;
@@ -281,7 +281,7 @@ bool Scheduler::queueJob(int id, unsigned char *image, int width, int height)
         if (scaled_img) {
             try {
                 job::Job *new_job = new job::Job(id, width, height, scaled_width, scaled_height, scaled_img);
-        std::cout << "calling nominated_worker->estimateAsync" << std::endl;
+        //std::cout << "calling nominated_worker->estimateAsync" << std::endl;
                 ret = nominated_worker->estimateAsync(new_job);
             }
             catch (const std::exception &ex) {
@@ -318,3 +318,5 @@ void Scheduler::joinThreads(void)
 
 
 }  // namespace scheduler
+
+#endif // 0

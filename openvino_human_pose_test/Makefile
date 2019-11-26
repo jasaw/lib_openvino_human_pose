@@ -12,13 +12,13 @@ POSE_OBJ:=$(POSE_SRC:%.c=%.o)
 
 .DEFAULT_GOAL := all
 
-all: human_pose_estomator_test
+all: human_pose_estimator_test
 
 %.o: %.c
 	$(CC) -c -o $@ $< $(CFLAGS)
 
-human_pose_estomator_test: $(POSE_OBJ)
+human_pose_estimator_test: $(POSE_OBJ)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 clean:
-	-@$(RM) human_pose_estomator_test $(POSE_OBJ)
+	-@$(RM) human_pose_estimator_test $(POSE_OBJ)

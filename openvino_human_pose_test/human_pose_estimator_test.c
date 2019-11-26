@@ -334,8 +334,9 @@ int main(int argc, char *argv[])
         goto clean_up;
     }
 
+    int debug_num_dev = 8;
     printf("process image\n");
-    for (int id = 0; id < 2; id++)
+    for (int id = 0; id < debug_num_dev; id++)
         libdetect.alt_detect_process_yuv420(id, yuv_image, width, height);
     //if (libdetect.alt_detect_process_yuv420(id, yuv_image, width, height))
     //{
@@ -348,7 +349,7 @@ int main(int argc, char *argv[])
         printf("wait for result ...\n");
         while (1) {
             int alldone = 1;
-            for (int id = 0; id < 2; id++)
+            for (int id = 0; id < debug_num_dev; id++)
                 alldone &= libdetect.alt_detect_result_ready(id);
             if (alldone)
                 break;
@@ -362,11 +363,11 @@ int main(int argc, char *argv[])
         printf("result ready\n");
 
         printf("get results\n");
-        for (int id = 0; id < 2; id++) {
+        for (int id = 0; id < debug_num_dev; id++) {
             if (libdetect.alt_detect_get_result(id, score_threshold, &alt_detect_result) >= 0) {
                 printf("overlay result %d on image\n", id);
                 overlay_result_on_image(yuv_image, width, height, &alt_detect_result);
-                //libdetect->alt_detect_save_yuv420(yuv_image, width, height, "out.png");
+                libdetect.alt_detect_save_yuv420(yuv_image, width, height, "out.png");
             }
         }
 

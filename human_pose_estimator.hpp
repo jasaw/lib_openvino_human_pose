@@ -14,7 +14,7 @@
 #include <queue>
 #include <utility>
 #include <mutex>
-#include <condition_variable>
+//#include <condition_variable>
 
 #include <inference_engine.hpp>
 #include <opencv2/imgproc/imgproc.hpp>
@@ -28,31 +28,49 @@
 
 namespace human_pose_estimation {
 
+
+class Worker {
+public:
+    Worker(void);
+    int queue_available_size(void);
+
+    InferenceEngine::ExecutableNetwork executableNetwork;
+    std::pair<InferenceEngine::InferRequest::Ptr, std::shared_ptr<job::Job>> infwork[INFER_QUEUE_SIZE];
+    int worker_id;
+    std::shared_ptr<std::mutex> jobs_mutex;
+};
+
+
 class HumanPoseEstimator {
 public:
     static const size_t keypointsNumber;
 
-    HumanPoseEstimator(int worker_id_,
+    HumanPoseEstimator(int numDevices_,
                        const std::string& modelXmlPath,
                        const std::string& modelBinPath,
                        const std::string& targetDeviceName);
     ~HumanPoseEstimator();
-    bool estimateAsync(job::Job *new_job);
-    bool queue_not_full(void);
-    int queue_available_size(void);
-    int get_worker_id(void);
-    bool current_job_is_done(void);
-    std::pair<int, std::vector<human_pose_estimation::HumanPose>> getResult(void);
-    void getInputWidthHeight(int *width, int *height);
+    bool queueJob(int id, unsigned char *image, int width, int height);
+    bool resultIsReady(int id);
+    std::vector<human_pose_estimation::HumanPose> getResult(int id);
 
-    std::mutex *jobs_mutex;
-    std::condition_variable *jobs_cond;
+    bool matchJobIdToWorkerId;
 
 private:
-    void set_notify_on_job_completion(InferenceEngine::InferRequest *request) const;
-    int get_next_empty_job_index(void);
+    void estimateAsync(int worker_id_, InferenceEngine::InferRequest::Ptr request, std::shared_ptr<job::Job> the_job);
+    std::vector<human_pose_estimation::HumanPose> getInferenceResult(InferenceEngine::InferRequest::Ptr request,
+                                                                     std::shared_ptr<job::Job> the_job,
+                                                                     int worker_id_);
+    void getInputWidthHeight(int *width, int *height);
+    void set_notify_on_job_completion(std::pair<InferenceEngine::InferRequest::Ptr, std::shared_ptr<job::Job>> *infwork,
+                                      std::shared_ptr<std::mutex> jobs_mutex,
+                                      int worker_id_);
+    void get_scaled_image_dimensions(int width, int height,
+                                     int *scaled_width, int *scaled_height);
+    unsigned char *scale_yuv2bgr(unsigned char *src_img, int width, int height, int scaled_width, int scaled_height);
+
     void imageToBuffer(const cv::Mat& scaledImage, uint8_t* buffer) const;
-    std::vector<human_pose_estimation::HumanPose> getPoses(InferenceEngine::InferRequest *request,
+    std::vector<human_pose_estimation::HumanPose> getPoses(InferenceEngine::InferRequest::Ptr request,
                                                            const cv::Size& orgImageSize,
                                                            const cv::Size& scaledImageSize) const;
     std::vector<human_pose_estimation::HumanPose> postprocess(
@@ -80,14 +98,13 @@ private:
     int upsampleRatio;
     InferenceEngine::Core ie;
     InferenceEngine::CNNNetwork network;
-    InferenceEngine::ExecutableNetwork executableNetwork;
-    InferenceEngine::InferRequest async_infer_request[INFER_QUEUE_SIZE];
-    job::Job *the_job[INFER_QUEUE_SIZE];
-    int job_index;
+    int numDevices;
     std::string inputName;
     std::string pafsBlobName;
     std::string heatmapsBlobName;
-    int worker_id;
+    std::vector<std::shared_ptr<Worker>> workers;
+    std::mutex results_mutex;
+    std::map<int, std::queue<std::vector<human_pose_estimation::HumanPose>>> results;
 };
 
 }  // namespace human_pose_estimation
