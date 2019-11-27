@@ -243,7 +243,6 @@ int alt_detect_process_yuv420(int id, unsigned char *image, int width, int heigh
 int alt_detect_result_ready(int id)
 {
     if (sched->resultIsReady(id))
-    //if (sched->current_job_is_done(id))
         return 1;
     return 0;
 }

@@ -37,6 +37,7 @@ public:
     InferenceEngine::ExecutableNetwork executableNetwork;
     std::pair<InferenceEngine::InferRequest::Ptr, std::shared_ptr<job::Job>> infwork[INFER_QUEUE_SIZE];
     int worker_id;
+    std::string target_device_name;
     std::shared_ptr<std::mutex> jobs_mutex;
 };
 
@@ -57,10 +58,16 @@ public:
     bool matchJobIdToWorkerId;
 
 private:
+    int save_image_as_png(const cv::Mat &img, const char *filename);
+    void pollAsyncInferenceResults(void);
+
     void estimateAsync(int worker_id_, InferenceEngine::InferRequest::Ptr request, std::shared_ptr<job::Job> the_job);
     std::vector<human_pose_estimation::HumanPose> getInferenceResult(InferenceEngine::InferRequest::Ptr request,
                                                                      std::shared_ptr<job::Job> the_job,
                                                                      int worker_id_);
+    std::vector<human_pose_estimation::HumanPose> getWaitInferenceResult(InferenceEngine::InferRequest::Ptr request,
+                                                                         std::shared_ptr<job::Job> the_job,
+                                                                         int worker_id_);
     void getInputWidthHeight(int *width, int *height);
     void set_notify_on_job_completion(std::pair<InferenceEngine::InferRequest::Ptr, std::shared_ptr<job::Job>> *infwork,
                                       std::shared_ptr<std::mutex> jobs_mutex,

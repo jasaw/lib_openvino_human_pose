@@ -17,7 +17,7 @@ extern "C" {
 #include "peak.hpp"
 #include "human_pose_estimator.hpp"
 
-//#include <opencv2/opencv.hpp>
+#include <opencv2/opencv.hpp> // for IMWRITE_PNG_COMPRESSION
 
 
 
@@ -61,11 +61,11 @@ unsigned char *HumanPoseEstimator::scale_yuv2bgr(unsigned char *src_img, int wid
                              SWS_BICUBIC, NULL, NULL, NULL);
     if (!sws_ctx)
     {
-        //std::ostringstream stringStream;
-        //stringStream << "Impossible to create scale context for image conversion fmt:"
-        //             << av_get_pix_fmt_name(src_pix_fmt) << " s:" << src_w << "x" << src_h
-        //             << " -> fmt:" << av_get_pix_fmt_name(dst_pix_fmt) << " s:" << dst_w << "x" << dst_h;
-        //errMessage = stringStream.str();
+        std::ostringstream stringStream;
+        stringStream << "Impossible to create scale context for image conversion fmt:"
+                     << av_get_pix_fmt_name(src_pix_fmt) << " s:" << src_w << "x" << src_h
+                     << " -> fmt:" << av_get_pix_fmt_name(dst_pix_fmt) << " s:" << dst_w << "x" << dst_h;
+        errMessage = stringStream.str();
         return NULL;
     }
 
@@ -73,9 +73,9 @@ unsigned char *HumanPoseEstimator::scale_yuv2bgr(unsigned char *src_img, int wid
                                            src_pix_fmt, src_w, src_h, 1);
     if (srcNumBytes < 0)
     {
-        //std::ostringstream stringStream;
-        //stringStream << "Failed to fill image arrays: code " << srcNumBytes;
-        //errMessage = stringStream.str();
+        std::ostringstream stringStream;
+        stringStream << "Failed to fill image arrays: code " << srcNumBytes;
+        errMessage = stringStream.str();
         sws_freeContext(sws_ctx);
         return NULL;
     }
@@ -84,9 +84,9 @@ unsigned char *HumanPoseEstimator::scale_yuv2bgr(unsigned char *src_img, int wid
     if ((dst_bufsize = av_image_alloc(dst_data, dst_linesize,
                        dst_w, dst_h, dst_pix_fmt, 1)) < 0)
     {
-        //std::ostringstream stringStream;
-        //stringStream << "Failed to allocate dst image";
-        //errMessage = stringStream.str();
+        std::ostringstream stringStream;
+        stringStream << "Failed to allocate dst image";
+        errMessage = stringStream.str();
         sws_freeContext(sws_ctx);
         return NULL;
     }
@@ -106,7 +106,7 @@ HumanPoseEstimator::HumanPoseEstimator(int numDevices_,
                                        const std::string& targetDeviceName)
     : minJointsNumber(3),
       stride(8),
-      meanPixel(cv::Vec3f::all(128)),
+      meanPixel(cv::Vec3f::all(255)),
       minPeaksDistance(3.0f),
       midPointsScoreThreshold(0.05f),
       foundMidPointsRatioThreshold(0.8f),
@@ -123,8 +123,6 @@ HumanPoseEstimator::HumanPoseEstimator(int numDevices_,
     std::vector<std::string> availableDevices = ie.GetAvailableDevices();
     if ((numDevices <= 0) || ((int)availableDevices.size() < numDevices))
         numDevices = availableDevices.size();
-
-    // TODO: deal with numDevices == 0
 
     // Debug only
     std::cout << "Available devices: " << std::endl;
@@ -155,10 +153,11 @@ HumanPoseEstimator::HumanPoseEstimator(int numDevices_,
 
     // load network to device
     for (int i = 0; i < numDevices; i++) {
-        std::cout << "estimator " << i << " targetDeviceName : " << availableDevices.at(i) << std::endl;
         auto w = std::make_shared<Worker>();
         w->worker_id = i;
-        w->executableNetwork = ie.LoadNetwork(network, availableDevices.at(i), {});
+        w->target_device_name = availableDevices.at(i);
+        std::cout << "estimator " << i << " targetDeviceName : " << w->target_device_name << std::endl;
+        w->executableNetwork = ie.LoadNetwork(network, w->target_device_name, {});
         for (int j = 0; j < INFER_QUEUE_SIZE; j++) {
             w->infwork[j].first = w->executableNetwork.CreateInferRequestPtr();
             set_notify_on_job_completion(&w->infwork[j], w->jobs_mutex, w->worker_id);
@@ -184,6 +183,8 @@ void HumanPoseEstimator::set_notify_on_job_completion(std::pair<InferenceEngine:
     infwork->first->SetCompletionCallback(
         [&, infwork, jobs_mutex, worker_id_] {
                 std::cout << "estimator " << worker_id_ << " callback for job ID " << infwork->second->id << std::endl;
+
+                // Get inference result
                 std::unique_lock<std::mutex> mlock(*jobs_mutex);
                 if ((infwork->second) && (infwork->second->is_valid())) {
                     std::vector<human_pose_estimation::HumanPose> poses = getInferenceResult(infwork->first,
@@ -215,6 +216,27 @@ void HumanPoseEstimator::set_notify_on_job_completion(std::pair<InferenceEngine:
                 }
             }
         );
+}
+
+
+int HumanPoseEstimator::save_image_as_png(const cv::Mat &img, const char *filename)
+{
+    //cv::Size imageSize = img.size();
+    //std::cout << "imageSize.width = " << imageSize.width << std::endl;
+    //std::cout << "imageSize.height = " << imageSize.height << std::endl;
+    std::vector<int> compression_params;
+    compression_params.push_back(cv::IMWRITE_PNG_COMPRESSION);
+    compression_params.push_back(0);
+
+    try {
+        cv::imwrite(filename, img, compression_params);
+    }
+    catch (std::runtime_error& ex) {
+        errMessage = "failed to convert image to PNG format: ";
+        errMessage.append(ex.what());
+        return -1;
+    }
+    return 0;
 }
 
 
@@ -252,6 +274,27 @@ bool HumanPoseEstimator::queueJob(int id, unsigned char *image, int width, int h
         int scaled_width = 0;
         int scaled_height = 0;
         get_scaled_image_dimensions(width, height, &scaled_width, &scaled_height);
+
+        //// resize model input
+        //if ((scaled_width != inputLayerSize.width) || (scaled_height != inputLayerSize.height)) {
+        //    inputLayerSize.width = scaled_width;
+        //    inputLayerSize.height = scaled_height;
+        //    auto input_shapes = network.getInputShapes();
+        //    std::string input_name;
+        //    InferenceEngine::SizeVector input_shape;
+        //    std::tie(input_name, input_shape) = *input_shapes.begin();
+        //    input_shape[2] = inputLayerSize.height;
+        //    input_shape[3] = inputLayerSize.width;
+        //    input_shapes[input_name] = input_shape;
+        //    network.reshape(input_shapes);
+        //
+        //    nominated_worker->executableNetwork = ie.LoadNetwork(network, nominated_worker->target_device_name, {});
+        //    for (int j = 0; j < INFER_QUEUE_SIZE; j++) {
+        //        nominated_worker->infwork[j].first = nominated_worker->executableNetwork.CreateInferRequestPtr();
+        //        set_notify_on_job_completion(&nominated_worker->infwork[j], nominated_worker->jobs_mutex, nominated_worker->worker_id);
+        //    }
+        //}
+
         unsigned char *scaled_img = scale_yuv2bgr(image, width, height, scaled_width, scaled_height);
         if (scaled_img) {
             try {
@@ -283,7 +326,9 @@ bool HumanPoseEstimator::queueJob(int id, unsigned char *image, int width, int h
 
 // return id negative means no inference result
 void HumanPoseEstimator::estimateAsync(int worker_id_, InferenceEngine::InferRequest::Ptr request, std::shared_ptr<job::Job> the_job) {
+    //save_image_as_png(the_job->scaledImage, "scaled_input.png");
     cv::Mat paddedImage = padImage(the_job->scaledImage);
+    //save_image_as_png(paddedImage, "padded_input.png");
     InferenceEngine::Blob::Ptr input = request->GetBlob(inputName);
     auto buffer = input->buffer().as<InferenceEngine::PrecisionTrait<InferenceEngine::Precision::U8>::value_type *>();
     imageToBuffer(paddedImage, buffer);
@@ -293,8 +338,46 @@ void HumanPoseEstimator::estimateAsync(int worker_id_, InferenceEngine::InferReq
 }
 
 
+void HumanPoseEstimator::pollAsyncInferenceResults(void)
+{
+    for (auto& worker : this->workers) {
+        for (int i = 0; i < INFER_QUEUE_SIZE; i++) {
+            std::unique_lock<std::mutex> mlock(*worker->jobs_mutex);
+            if ((worker->infwork[i].second) && (worker->infwork[i].second->is_valid())) {
+
+                InferenceEngine::StatusCode state = worker->infwork[i].first->Wait(InferenceEngine::IInferRequest::WaitMode::STATUS_ONLY);
+                if (InferenceEngine::StatusCode::OK == state) {
+                    std::vector<human_pose_estimation::HumanPose> poses = getWaitInferenceResult(worker->infwork[i].first,
+                                                                                                 worker->infwork[i].second,
+                                                                                                 worker->worker_id);
+                    int job_id = worker->infwork[i].second->id;
+                    std::shared_ptr<job::Job> no_job(nullptr);
+                    no_job.swap(worker->infwork[i].second);
+                    mlock.unlock();
+
+                    std::unique_lock<std::mutex> resmlock(results_mutex);
+                    std::map<int, std::queue<std::vector<human_pose_estimation::HumanPose>>>::iterator it;
+                    it = results.find(job_id);
+                    if (it != results.end()) {
+                        // found it, append to queue
+                        it->second.push(poses);
+                    } else {
+                        // not found, create a new queue
+                        std::queue<std::vector<human_pose_estimation::HumanPose>> result_q;
+                        result_q.push(poses);
+                        results.insert(std::make_pair(job_id, result_q));
+                    }
+                    resmlock.unlock();
+                }
+            }
+        }
+    }
+}
+
+
 bool HumanPoseEstimator::resultIsReady(int id)
 {
+    //pollAsyncInferenceResults();
     std::unique_lock<std::mutex> mlock(results_mutex);
     std::map<int, std::queue<std::vector<human_pose_estimation::HumanPose>>>::iterator it;
     it = results.find(id);
@@ -339,17 +422,16 @@ std::vector<human_pose_estimation::HumanPose> HumanPoseEstimator::getPoses(Infer
 }
 
 
-std::vector<human_pose_estimation::HumanPose> HumanPoseEstimator::getInferenceResult(InferenceEngine::InferRequest::Ptr request,
-                                                                                     std::shared_ptr<job::Job> the_job,
-                                                                                     int worker_id_) {
+std::vector<human_pose_estimation::HumanPose> HumanPoseEstimator::getWaitInferenceResult(InferenceEngine::InferRequest::Ptr request,
+                                                                                         std::shared_ptr<job::Job> the_job,
+                                                                                         int worker_id_) {
     std::vector<human_pose_estimation::HumanPose> poses;
     InferenceEngine::StatusCode state = request->Wait(InferenceEngine::IInferRequest::WaitMode::STATUS_ONLY);
     std::cout << "estimator " << worker_id_ << " status is " << state << std::endl;
-    //if (InferenceEngine::StatusCode::OK == state) {
+    if (InferenceEngine::StatusCode::OK == state) {
         // process result
-        //std::cout << "estimator " << worker_id_ << " : Inference job completed, calling wait" << std::endl;
-        //if (InferenceEngine::StatusCode::OK == request->Wait(InferenceEngine::IInferRequest::WaitMode::RESULT_READY)) {
-        //request->Wait(InferenceEngine::IInferRequest::WaitMode::RESULT_READY);
+        std::cout << "estimator " << worker_id_ << " : Inference job completed, calling wait" << std::endl;
+        if (InferenceEngine::StatusCode::OK == request->Wait(InferenceEngine::IInferRequest::WaitMode::RESULT_READY)) {
 
             std::cout << "estimator " << worker_id_ << " : Getting results for job ID " << the_job->id << std::endl;
 
@@ -357,8 +439,21 @@ std::vector<human_pose_estimation::HumanPose> HumanPoseEstimator::getInferenceRe
             poses = getPoses(request,
                              the_job->fullImageSize,
                              scaledImageSize);
-        //}
-    //}
+        }
+    }
+    return poses;
+}
+
+
+std::vector<human_pose_estimation::HumanPose> HumanPoseEstimator::getInferenceResult(InferenceEngine::InferRequest::Ptr request,
+                                                                                     std::shared_ptr<job::Job> the_job,
+                                                                                     int worker_id_) {
+    std::cout << "estimator " << worker_id_ << " : Getting results for job ID " << the_job->id << std::endl;
+
+    cv::Size scaledImageSize = the_job->scaledImage.size();
+    std::vector<human_pose_estimation::HumanPose> poses = getPoses(request,
+                                                                   the_job->fullImageSize,
+                                                                   scaledImageSize);
     return poses;
 }
 
@@ -500,8 +595,6 @@ void HumanPoseEstimator::correctCoordinates(std::vector<human_pose_estimation::H
 Worker::Worker(void)
 {
     jobs_mutex = std::make_shared<std::mutex>();
-    //for (int i = 0; i < INFER_QUEUE_SIZE; i++)
-    //    infwork[i].second = std::make_shared<job::Job>();
 }
 
 
