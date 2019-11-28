@@ -291,7 +291,16 @@ int alt_detect_init(const char *config_file)
     std::string _modelXmlPath("human-pose-estimation-0001.xml");
     std::string _modelBinPath("human-pose-estimation-0001.bin");
     std::string _targetDeviceName("MYRIAD");
+    // Setting matchJobIdToWorkerId to true locks one job source to one worker
+    // to guarantee sequential output for the job. Each job source needs to have
+    // a unique ID.
+    // e.g. worker 3 will only process jobs with source ID 3.
+    // Setting matchJobIdToWorkerId to false will queue the job the next
+    // available worker. Output is not guaranteed to be sequential as some
+    // workers may be faster than others.
+    bool matchJobIdToWorkerId = false;
     int _numDevices = 0; // zero means use all available inference devices
+    int queueSize = 1; // per worker
     struct stat st;
 
     if (sched)
@@ -320,6 +329,11 @@ int alt_detect_init(const char *config_file)
                         _targetDeviceName = value;
                     } else if (name == "NUM_DEVICES") {
                         _numDevices = std::stoi(value);
+                    } else if (name == "MATCH_JOB_WORKER_ID") {
+                        if (value == "true")
+                            matchJobIdToWorkerId = true;
+                    } else if (name == "WORKER_QUEUE_SIZE") {
+                        queueSize = std::stoi(value);
                     }
                 }
             } else {
@@ -340,7 +354,12 @@ int alt_detect_init(const char *config_file)
             return -1;
         }
 
-        sched = new human_pose_estimation::HumanPoseEstimator(_numDevices, _modelXmlPath, _modelBinPath, _targetDeviceName);
+        sched = new human_pose_estimation::HumanPoseEstimator(matchJobIdToWorkerId,
+                                                              queueSize,
+                                                              _numDevices,
+                                                              _modelXmlPath,
+                                                              _modelBinPath,
+                                                              _targetDeviceName);
     }
 
     catch (const std::exception &ex) {

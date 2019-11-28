@@ -100,7 +100,9 @@ unsigned char *HumanPoseEstimator::scale_yuv2bgr(unsigned char *src_img, int wid
 }
 
 
-HumanPoseEstimator::HumanPoseEstimator(int numDevices_,
+HumanPoseEstimator::HumanPoseEstimator(bool matchJobIdToWorkerId_,
+                                       int queueSize_,
+                                       int numDevices_,
                                        const std::string& modelXmlPath,
                                        const std::string& modelBinPath,
                                        const std::string& targetDeviceName)
@@ -116,7 +118,7 @@ HumanPoseEstimator::HumanPoseEstimator(int numDevices_,
 
     (void)targetDeviceName;
 
-    matchJobIdToWorkerId = false;
+    matchJobIdToWorkerId = matchJobIdToWorkerId_;
     numDevices = numDevices_;
 
     // get ALL inference devices
@@ -153,12 +155,11 @@ HumanPoseEstimator::HumanPoseEstimator(int numDevices_,
 
     // load network to device
     for (int i = 0; i < numDevices; i++) {
-        auto w = std::make_shared<Worker>();
-        w->worker_id = i;
-        w->target_device_name = availableDevices.at(i);
+        auto w = std::make_shared<Worker>(i, queueSize_, availableDevices.at(i));
         std::cout << "estimator " << i << " targetDeviceName : " << w->target_device_name << std::endl;
         w->executableNetwork = ie.LoadNetwork(network, w->target_device_name, {});
-        for (int j = 0; j < INFER_QUEUE_SIZE; j++) {
+        // TODO: move this loop into worker object
+        for (int j = 0; j < w->queue_size; j++) {
             w->infwork[j].first = w->executableNetwork.CreateInferRequestPtr();
             set_notify_on_job_completion(&w->infwork[j], w->jobs_mutex, w->worker_id);
         }
@@ -289,7 +290,7 @@ bool HumanPoseEstimator::queueJob(int id, unsigned char *image, int width, int h
         //    network.reshape(input_shapes);
         //
         //    nominated_worker->executableNetwork = ie.LoadNetwork(network, nominated_worker->target_device_name, {});
-        //    for (int j = 0; j < INFER_QUEUE_SIZE; j++) {
+        //    for (int j = 0; j < nominated_worker->queue_size; j++) {
         //        nominated_worker->infwork[j].first = nominated_worker->executableNetwork.CreateInferRequestPtr();
         //        set_notify_on_job_completion(&nominated_worker->infwork[j], nominated_worker->jobs_mutex, nominated_worker->worker_id);
         //    }
@@ -299,7 +300,7 @@ bool HumanPoseEstimator::queueJob(int id, unsigned char *image, int width, int h
         if (scaled_img) {
             try {
                 std::unique_lock<std::mutex> mlock(*nominated_worker->jobs_mutex);
-                for (int i = 0; i < INFER_QUEUE_SIZE; i++) {
+                for (int i = 0; i < nominated_worker->queue_size; i++) {
                     if ((!nominated_worker->infwork[i].second) || (!nominated_worker->infwork[i].second->is_valid())) {
                         nominated_worker->infwork[i].second = std::make_shared<job::Job>(id, width, height, scaled_width, scaled_height, scaled_img);
                         mlock.unlock();
@@ -341,7 +342,7 @@ void HumanPoseEstimator::estimateAsync(int worker_id_, InferenceEngine::InferReq
 void HumanPoseEstimator::pollAsyncInferenceResults(void)
 {
     for (auto& worker : this->workers) {
-        for (int i = 0; i < INFER_QUEUE_SIZE; i++) {
+        for (int i = 0; i < worker->queue_size; i++) {
             std::unique_lock<std::mutex> mlock(*worker->jobs_mutex);
             if ((worker->infwork[i].second) && (worker->infwork[i].second->is_valid())) {
 
@@ -592,9 +593,13 @@ void HumanPoseEstimator::correctCoordinates(std::vector<human_pose_estimation::H
 
 
 
-Worker::Worker(void)
+Worker::Worker(int worker_id_, int queueSize_, std::string &targetDeviceName)
 {
+    worker_id = worker_id_;
+    queue_size = queueSize_;
+    target_device_name = targetDeviceName;
     jobs_mutex = std::make_shared<std::mutex>();
+    infwork = std::make_unique<std::pair<InferenceEngine::InferRequest::Ptr, std::shared_ptr<job::Job>>[]>(queue_size);
 }
 
 
@@ -602,7 +607,7 @@ int Worker::queue_available_size(void)
 {
     int cnt = 0;
     std::unique_lock<std::mutex> mlock(*jobs_mutex);
-    for (int i = 0; i < INFER_QUEUE_SIZE; i++) {
+    for (int i = 0; i < queue_size; i++) {
         if ((!infwork[i].second) || (!infwork[i].second->is_valid()))
             cnt++;
     }

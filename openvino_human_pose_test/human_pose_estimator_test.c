@@ -289,7 +289,7 @@ int main(int argc, char *argv[])
     memset(images, 0, sizeof(image_t) * num_images);
     for (i = 0; i < num_images; i++) {
         images[i].input_jpeg_file = argv[optind + i];
-        images[i].id = i;
+        images[i].id = num_images-i-1;
         images[i].output_file = malloc(strlen(images[i].input_jpeg_file) +
                                        strlen(output_file_prefix) +
                                        strlen(output_file_suffix) + 1);

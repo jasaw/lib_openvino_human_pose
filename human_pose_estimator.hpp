@@ -23,20 +23,19 @@
 #include "human_pose.hpp"
 
 
-#define INFER_QUEUE_SIZE    2
-
 
 namespace human_pose_estimation {
 
 
 class Worker {
 public:
-    Worker(void);
+    Worker(int worker_id_, int queueSize_, std::string &targetDeviceName);
     int queue_available_size(void);
 
     InferenceEngine::ExecutableNetwork executableNetwork;
-    std::pair<InferenceEngine::InferRequest::Ptr, std::shared_ptr<job::Job>> infwork[INFER_QUEUE_SIZE];
+    std::unique_ptr<std::pair<InferenceEngine::InferRequest::Ptr, std::shared_ptr<job::Job>>[]> infwork;
     int worker_id;
+    int queue_size;
     std::string target_device_name;
     std::shared_ptr<std::mutex> jobs_mutex;
 };
@@ -46,7 +45,9 @@ class HumanPoseEstimator {
 public:
     static const size_t keypointsNumber;
 
-    HumanPoseEstimator(int numDevices_,
+    HumanPoseEstimator(bool matchJobIdToWorkerId_,
+                       int queueSize_,
+                       int numDevices_,
                        const std::string& modelXmlPath,
                        const std::string& modelBinPath,
                        const std::string& targetDeviceName);
