@@ -13,11 +13,9 @@
 #include <iostream>
 #include <fstream>
 #include <algorithm>
-//#include <map>
 #include <sys/stat.h>
 #include <opencv2/opencv.hpp>
 #include "human_pose_estimator.hpp"
-//#include "scheduler.hpp"
 #include "log.hpp"
 #include "alt_detect.h"
 
