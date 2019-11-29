@@ -128,10 +128,10 @@ HumanPoseEstimator::HumanPoseEstimator(bool matchJobIdToWorkerId_,
         numDevices = availableDevices.size();
 
     // Debug only
-    std::cout << "Available devices: " << std::endl;
-    for (auto && device : availableDevices) {
-        std::cout << "\tDevice: " << device << std::endl;
-    }
+    //std::cout << "Available devices: " << std::endl;
+    //for (auto && device : availableDevices) {
+    //    std::cout << "\tDevice: " << device << std::endl;
+    //}
 
     // read model
     InferenceEngine::CNNNetReader netReader;
@@ -157,7 +157,7 @@ HumanPoseEstimator::HumanPoseEstimator(bool matchJobIdToWorkerId_,
     // load network to device
     for (int i = 0; i < numDevices; i++) {
         auto w = std::make_shared<Worker>(i, queueSize_, availableDevices.at(i));
-        std::cout << "estimator " << i << " targetDeviceName : " << w->target_device_name << std::endl;
+        //std::cout << "estimator " << i << " targetDeviceName : " << w->target_device_name << std::endl;
         w->executableNetwork = ie.LoadNetwork(network, w->target_device_name, {});
         // TODO: move this loop into worker object
         for (int j = 0; j < w->queue_size; j++) {
@@ -191,7 +191,7 @@ void HumanPoseEstimator::set_notify_on_job_completion(std::pair<InferenceEngine:
                                                       int worker_id_) {
     infwork->first->SetCompletionCallback(
         [&, infwork, jobs_mutex, worker_id_] {
-                std::cout << "estimator " << worker_id_ << " callback for job ID " << infwork->second->id << std::endl;
+                //std::cout << "estimator " << worker_id_ << " callback for job ID " << infwork->second->id << std::endl;
 
                 // Get inference result
                 std::unique_lock<std::mutex> mlock(*jobs_mutex);
@@ -221,7 +221,7 @@ void HumanPoseEstimator::set_notify_on_job_completion(std::pair<InferenceEngine:
                     resmlock.unlock();
                 } else {
                     // invalid job ?!
-                    std::cout << "Invalid Job ID" << std::endl;
+                    //std::cout << "Invalid Job ID" << std::endl;
                     if (InferenceEngine::StatusCode::OK == infwork->first->Wait(InferenceEngine::IInferRequest::WaitMode::STATUS_ONLY))
                         infwork->first->Wait(InferenceEngine::IInferRequest::WaitMode::RESULT_READY);
                 }
@@ -348,7 +348,7 @@ void HumanPoseEstimator::estimateAsync(int worker_id_, InferenceEngine::InferReq
     auto buffer = input->buffer().as<InferenceEngine::PrecisionTrait<InferenceEngine::Precision::U8>::value_type *>();
     imageToBuffer(paddedImage, buffer);
 
-    std::cout << "estimator " << worker_id_ << " : Start async inference for job ID " << the_job->id << std::endl;
+    //std::cout << "estimator " << worker_id_ << " : Start async inference for job ID " << the_job->id << std::endl;
     request->StartAsync();
 }
 
@@ -444,13 +444,13 @@ std::vector<human_pose_estimation::HumanPose> HumanPoseEstimator::getWaitInferen
                                                                                          int worker_id_) {
     std::vector<human_pose_estimation::HumanPose> poses;
     InferenceEngine::StatusCode state = request->Wait(InferenceEngine::IInferRequest::WaitMode::STATUS_ONLY);
-    std::cout << "estimator " << worker_id_ << " status is " << state << std::endl;
+    //std::cout << "estimator " << worker_id_ << " status is " << state << std::endl;
     if (InferenceEngine::StatusCode::OK == state) {
         // process result
-        std::cout << "estimator " << worker_id_ << " : Inference job completed, calling wait" << std::endl;
+        //std::cout << "estimator " << worker_id_ << " : Inference job completed, calling wait" << std::endl;
         if (InferenceEngine::StatusCode::OK == request->Wait(InferenceEngine::IInferRequest::WaitMode::RESULT_READY)) {
 
-            std::cout << "estimator " << worker_id_ << " : Getting results for job ID " << the_job->id << std::endl;
+            //std::cout << "estimator " << worker_id_ << " : Getting results for job ID " << the_job->id << std::endl;
 
             cv::Size scaledImageSize = the_job->scaledImage.size();
             poses = getPoses(request,
@@ -465,7 +465,7 @@ std::vector<human_pose_estimation::HumanPose> HumanPoseEstimator::getWaitInferen
 std::vector<human_pose_estimation::HumanPose> HumanPoseEstimator::getInferenceResult(InferenceEngine::InferRequest::Ptr request,
                                                                                      std::shared_ptr<job::Job> the_job,
                                                                                      int worker_id_) {
-    std::cout << "estimator " << worker_id_ << " : Getting results for job ID " << the_job->id << std::endl;
+    //std::cout << "estimator " << worker_id_ << " : Getting results for job ID " << the_job->id << std::endl;
 
     cv::Size scaledImageSize = the_job->scaledImage.size();
     std::vector<human_pose_estimation::HumanPose> poses = getPoses(request,
