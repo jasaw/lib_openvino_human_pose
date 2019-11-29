@@ -69,7 +69,7 @@ const char *alt_detect_err_msg(void)
 //}
 
 
-static void humanPoseToLines(const std::vector<human_pose_estimation::HumanPose>& poses,
+static void humanPoseToLines(const std::pair<std::shared_ptr<struct timeval>, std::vector<human_pose_estimation::HumanPose>>& rp,
                              float score_threshold,
                              alt_detect_result_t *alt_detect_result)
 {
@@ -84,16 +84,18 @@ static void humanPoseToLines(const std::vector<human_pose_estimation::HumanPose>
 
     const cv::Point2f absentKeypoint(-1.0f, -1.0f);
 
-    int num_poses = poses.size();
+    int num_poses = rp.second.size();
     alt_detect_result->objs = new alt_detect_obj_t[num_poses];
     if (alt_detect_result->objs == NULL) {
         errMessage = "failed to allocate memory for results";
         return;
     }
     memset(alt_detect_result->objs, 0, sizeof(alt_detect_obj_t)*num_poses);
+    alt_detect_result->timestamp.tv_sec = rp.first->tv_sec;
+    alt_detect_result->timestamp.tv_usec = rp.first->tv_usec;
     alt_detect_result->num_objs = 0;
 
-    for (const auto& pose : poses) {
+    for (const auto& pose : rp.second) {
         alt_detect_obj_t *cur_obj = &alt_detect_result->objs[alt_detect_result->num_objs];
         cur_obj->score = pose.score;
         if (cur_obj->score < score_threshold)
@@ -232,9 +234,10 @@ int alt_detect_render_save_yuv420(unsigned char *image, int width, int height,
 
 // image in YUV420 format
 // return 0 on success
-int alt_detect_process_yuv420(int id, unsigned char *image, int width, int height)
+int alt_detect_process_yuv420(int id, struct timeval *timestamp,
+                              unsigned char *image, int width, int height)
 {
-    if (sched->queueJob(id, image, width, height))
+    if (sched->queueJob(id, timestamp, image, width, height))
         return 0;
     return -1;
 }
@@ -254,9 +257,9 @@ int alt_detect_get_result(int id, float score_threshold,
 {
     if (alt_detect_result == NULL)
         return -1;
-    std::vector<human_pose_estimation::HumanPose> poses = sched->getResult(id);
+    std::pair<std::shared_ptr<struct timeval>, std::vector<human_pose_estimation::HumanPose>> rp = sched->getResult(id);
     alt_detect_free_result(alt_detect_result);
-    humanPoseToLines(poses, score_threshold, alt_detect_result);
+    humanPoseToLines(rp, score_threshold, alt_detect_result);
     return alt_detect_result->num_objs;
 }
 

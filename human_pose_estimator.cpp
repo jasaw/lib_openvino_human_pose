@@ -7,6 +7,7 @@
 **
 ** -------------------------------------------------------------------------*/
 
+#include <sys/time.h>
 #include <iostream>
 extern "C" {
 #include <libavutil/imgutils.h>
@@ -178,6 +179,13 @@ void HumanPoseEstimator::getInputWidthHeight(int *width, int *height) {
 }
 
 
+static bool compare_timestamp(std::pair<std::shared_ptr<struct timeval>, std::vector<human_pose_estimation::HumanPose>> &first,
+                                           std::pair<std::shared_ptr<struct timeval>, std::vector<human_pose_estimation::HumanPose>> &second)
+{
+    return (timercmp(first.first.get(), second.first.get(), <));
+}
+
+
 void HumanPoseEstimator::set_notify_on_job_completion(std::pair<InferenceEngine::InferRequest::Ptr, std::shared_ptr<job::Job>> *infwork,
                                                       std::shared_ptr<std::mutex> jobs_mutex,
                                                       int worker_id_) {
@@ -192,20 +200,22 @@ void HumanPoseEstimator::set_notify_on_job_completion(std::pair<InferenceEngine:
                                                                                              infwork->second,
                                                                                              worker_id_);
                     int job_id = infwork->second->id;
+                    std::shared_ptr<struct timeval> ts = infwork->second->timestamp;
                     std::shared_ptr<job::Job> no_job(nullptr);
                     no_job.swap(infwork->second);
                     mlock.unlock();
 
                     std::unique_lock<std::mutex> resmlock(results_mutex);
-                    std::map<int, std::queue<std::vector<human_pose_estimation::HumanPose>>>::iterator it;
+                    std::map<int, std::list<std::pair<std::shared_ptr<struct timeval>, std::vector<human_pose_estimation::HumanPose>>>>::iterator it;
                     it = results.find(job_id);
                     if (it != results.end()) {
-                        // found it, append to queue
-                        it->second.push(poses);
+                        // found it, append to list
+                        it->second.emplace_back(ts, poses);
+                        it->second.sort(compare_timestamp);
                     } else {
-                        // not found, create a new queue
-                        std::queue<std::vector<human_pose_estimation::HumanPose>> result_q;
-                        result_q.push(poses);
+                        // not found, create a new list
+                        std::list<std::pair<std::shared_ptr<struct timeval>, std::vector<human_pose_estimation::HumanPose>>> result_q;
+                        result_q.emplace_back(ts, poses);
                         results.insert(std::make_pair(job_id, result_q));
                     }
                     resmlock.unlock();
@@ -241,7 +251,8 @@ int HumanPoseEstimator::save_image_as_png(const cv::Mat &img, const char *filena
 }
 
 
-bool HumanPoseEstimator::queueJob(int id, unsigned char *image, int width, int height)
+bool HumanPoseEstimator::queueJob(int id, struct timeval *timestamp,
+                                  unsigned char *image, int width, int height)
 {
     bool ret = false;
 
@@ -302,7 +313,10 @@ bool HumanPoseEstimator::queueJob(int id, unsigned char *image, int width, int h
                 std::unique_lock<std::mutex> mlock(*nominated_worker->jobs_mutex);
                 for (int i = 0; i < nominated_worker->queue_size; i++) {
                     if ((!nominated_worker->infwork[i].second) || (!nominated_worker->infwork[i].second->is_valid())) {
-                        nominated_worker->infwork[i].second = std::make_shared<job::Job>(id, width, height, scaled_width, scaled_height, scaled_img);
+                        std::shared_ptr<struct timeval> ts = std::make_shared<struct timeval>();
+                        ts->tv_sec = timestamp->tv_sec;
+                        ts->tv_usec = timestamp->tv_usec;
+                        nominated_worker->infwork[i].second = std::make_shared<job::Job>(id, ts, width, height, scaled_width, scaled_height, scaled_img);
                         mlock.unlock();
                         estimateAsync(nominated_worker->worker_id,
                                       nominated_worker->infwork[i].first,
@@ -352,20 +366,22 @@ void HumanPoseEstimator::pollAsyncInferenceResults(void)
                                                                                                  worker->infwork[i].second,
                                                                                                  worker->worker_id);
                     int job_id = worker->infwork[i].second->id;
+                    std::shared_ptr<struct timeval> ts = worker->infwork[i].second->timestamp;
                     std::shared_ptr<job::Job> no_job(nullptr);
                     no_job.swap(worker->infwork[i].second);
                     mlock.unlock();
 
                     std::unique_lock<std::mutex> resmlock(results_mutex);
-                    std::map<int, std::queue<std::vector<human_pose_estimation::HumanPose>>>::iterator it;
+                    std::map<int, std::list<std::pair<std::shared_ptr<struct timeval>, std::vector<human_pose_estimation::HumanPose>>>>::iterator it;
                     it = results.find(job_id);
                     if (it != results.end()) {
                         // found it, append to queue
-                        it->second.push(poses);
+                        it->second.emplace_back(ts, poses);
+                        it->second.sort(compare_timestamp);
                     } else {
                         // not found, create a new queue
-                        std::queue<std::vector<human_pose_estimation::HumanPose>> result_q;
-                        result_q.push(poses);
+                        std::list<std::pair<std::shared_ptr<struct timeval>, std::vector<human_pose_estimation::HumanPose>>> result_q;
+                        result_q.emplace_back(ts, poses);
                         results.insert(std::make_pair(job_id, result_q));
                     }
                     resmlock.unlock();
@@ -380,25 +396,25 @@ bool HumanPoseEstimator::resultIsReady(int id)
 {
     //pollAsyncInferenceResults();
     std::unique_lock<std::mutex> mlock(results_mutex);
-    std::map<int, std::queue<std::vector<human_pose_estimation::HumanPose>>>::iterator it;
+    std::map<int, std::list<std::pair<std::shared_ptr<struct timeval>, std::vector<human_pose_estimation::HumanPose>>>>::iterator it;
     it = results.find(id);
     return (it != results.end());
 }
 
 
-std::vector<human_pose_estimation::HumanPose> HumanPoseEstimator::getResult(int id)
+std::pair<std::shared_ptr<struct timeval>, std::vector<human_pose_estimation::HumanPose>> HumanPoseEstimator::getResult(int id)
 {
-    std::vector<human_pose_estimation::HumanPose> poses;
+    std::pair<std::shared_ptr<struct timeval>, std::vector<human_pose_estimation::HumanPose>> rp;
     std::unique_lock<std::mutex> mlock(results_mutex);
-    std::map<int, std::queue<std::vector<human_pose_estimation::HumanPose>>>::iterator it;
+    std::map<int, std::list<std::pair<std::shared_ptr<struct timeval>, std::vector<human_pose_estimation::HumanPose>>>>::iterator it;
     it = results.find(id);
     if (it != results.end()) {
-        poses = it->second.front();
-        it->second.pop();
+        rp = it->second.front();
+        it->second.pop_front();
         if (it->second.empty())
             results.erase(id);
     }
-    return poses;
+    return rp;
 }
 
 

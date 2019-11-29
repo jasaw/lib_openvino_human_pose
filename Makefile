@@ -1,4 +1,4 @@
-CXXFLAGS = -W -Wall -pthread -g -O3 -march=armv7-a -DNDEBUG $(EXTRA_CXXFLAGS)
+CXXFLAGS = -W -Wall -pthread -g -std=c++17 -O3 -march=armv7-a -DNDEBUG $(EXTRA_CXXFLAGS)
 RM = rm -rf
 CXX ?= $(CROSS)g++
 AR ?= $(CROSS)ar

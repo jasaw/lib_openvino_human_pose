@@ -19,6 +19,7 @@
 #include <unistd.h>
 #include <dlfcn.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 
 #include "jpeg_reader.h"
 #include "alt_detect.h"
@@ -36,7 +37,7 @@ typedef struct
     void *handle;
     int (*alt_detect_init)(const char *);
     void (*alt_detect_uninit)();
-    int (*alt_detect_process_yuv420)(int, unsigned char *, int, int);
+    int (*alt_detect_process_yuv420)(int, struct timeval *, unsigned char *, int, int);
     int (*alt_detect_result_ready)(int);
     int (*alt_detect_get_result)(int, float, alt_detect_result_t *);
     void (*alt_detect_free_result)(alt_detect_result_t *);
@@ -54,6 +55,7 @@ typedef struct
     unsigned char *output_buffer;
     unsigned char *yuv_image;
     char *output_file;
+    struct timeval timestamp;
     int width;
     int height;
     int id;
@@ -301,6 +303,7 @@ int main(int argc, char *argv[])
         strcpy(images[i].output_file, output_file_prefix);
         strcpy(images[i].output_file + strlen(output_file_prefix), images[i].input_jpeg_file);
         strcpy(images[i].output_file + strlen(output_file_prefix) + strlen(images[i].input_jpeg_file), output_file_suffix);
+        gettimeofday(&images[i].timestamp, NULL);
     }
     for (i = 0; i < num_images; i++) {
         if (stat(images[i].input_jpeg_file, &st) != 0)
@@ -392,6 +395,7 @@ int main(int argc, char *argv[])
         for (i = 0; i < num_images; i++) {
             if (images[i].state == STATE_NOT_PROCESSED) {
                 if (libdetect.alt_detect_process_yuv420(images[i].id,
+                                                        &images[i].timestamp,
                                                         images[i].yuv_image,
                                                         images[i].width,
                                                         images[i].height) == 0) {
@@ -404,7 +408,11 @@ int main(int argc, char *argv[])
                 if (libdetect.alt_detect_get_result(images[i].id,
                                                     score_threshold,
                                                     &alt_detect_result) >= 0) {
-                    printf("overlay result on image %s\n", images[i].output_file);
+                    printf("overlay result on image %s, ID %d, timestamp %ld.%06ld\n",
+                           images[i].output_file,
+                           images[i].id,
+                           alt_detect_result.timestamp.tv_sec,
+                           alt_detect_result.timestamp.tv_usec);
                     overlay_result_on_image(images[i].yuv_image, images[i].width,
                                             images[i].height, &alt_detect_result);
                     libdetect.alt_detect_save_yuv420(images[i].yuv_image,

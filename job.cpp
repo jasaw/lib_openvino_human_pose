@@ -22,11 +22,12 @@ Job::Job(void) : id(invalid_job_id)
 }
 
 
-Job::Job(int id_, int fullImageWidth, int fullImageHeight,
+Job::Job(int id_, std::shared_ptr<struct timeval> timestamp_, int fullImageWidth, int fullImageHeight,
          int scaledImageWidth, int scaledImageHeight, unsigned char *scaledImage)
     : id(id_),
       scaledImage(cv::Mat(scaledImageHeight, scaledImageWidth, CV_8UC3, scaledImage)),
-      fullImageSize(cv::Size(fullImageWidth, fullImageHeight))
+      fullImageSize(cv::Size(fullImageWidth, fullImageHeight)),
+      timestamp(timestamp_)
 {
 }
 

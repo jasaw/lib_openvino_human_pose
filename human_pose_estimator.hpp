@@ -9,6 +9,7 @@
 
 #pragma once
 
+#include <time.h>
 #include <string>
 #include <vector>
 #include <queue>
@@ -52,9 +53,10 @@ public:
                        const std::string& modelBinPath,
                        const std::string& targetDeviceName);
     ~HumanPoseEstimator();
-    bool queueJob(int id, unsigned char *image, int width, int height);
+    bool queueJob(int id, struct timeval *timestamp,
+                  unsigned char *image, int width, int height);
     bool resultIsReady(int id);
-    std::vector<human_pose_estimation::HumanPose> getResult(int id);
+    std::pair<std::shared_ptr<struct timeval>, std::vector<human_pose_estimation::HumanPose>> getResult(int id);
 
     bool matchJobIdToWorkerId;
 
@@ -112,7 +114,7 @@ private:
     std::string heatmapsBlobName;
     std::vector<std::shared_ptr<Worker>> workers;
     std::mutex results_mutex;
-    std::map<int, std::queue<std::vector<human_pose_estimation::HumanPose>>> results;
+    std::map<int, std::list<std::pair<std::shared_ptr<struct timeval>, std::vector<human_pose_estimation::HumanPose>>>> results;
 };
 
 }  // namespace human_pose_estimation
