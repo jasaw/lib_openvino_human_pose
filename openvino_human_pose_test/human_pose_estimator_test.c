@@ -19,6 +19,7 @@
 #include <unistd.h>
 #include <dlfcn.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 
 #include "jpeg_reader.h"
 #include "alt_detect.h"
@@ -26,15 +27,19 @@
 #define MAX(a,b) (a>b?a:b)
 
 
+#define STATE_NOT_PROCESSED     0
+#define STATE_PROCESSING        1
+#define STATE_DONE              2
+
+
 typedef struct
 {
     void *handle;
     int (*alt_detect_init)(const char *);
     void (*alt_detect_uninit)();
-    int (*alt_detect_process_yuv420)(unsigned char *, int, int);
-    int (*alt_detect_result_ready)(void);
-    int (*alt_detect_queue_empty)(void);
-    int (*alt_detect_get_result)(float, int, int, alt_detect_result_t *);
+    int (*alt_detect_process_yuv420)(int, struct timeval *, unsigned char *, int, int);
+    int (*alt_detect_result_ready)(int);
+    int (*alt_detect_get_result)(int, float, alt_detect_result_t *);
     void (*alt_detect_free_result)(alt_detect_result_t *);
     const char *(*alt_detect_err_msg)(void);
     int (*alt_detect_save_yuv420)(unsigned char *, int, int, const char *);
@@ -42,6 +47,20 @@ typedef struct
                                          alt_detect_result_t *, const char *);
 
 } lib_detect_info;
+
+
+typedef struct
+{
+    const char *input_jpeg_file;
+    unsigned char *output_buffer;
+    unsigned char *yuv_image;
+    char *output_file;
+    struct timeval timestamp;
+    int width;
+    int height;
+    int id;
+    int state;
+} image_t;
 
 
 static int lib_detect_load_sym(void **func, void *handle, char *symbol)
@@ -74,7 +93,6 @@ static int lib_detect_load(lib_detect_info *libdetect, const char *lib_detect_pa
     err |= lib_detect_load_sym((void **)(&libdetect->alt_detect_init),   libdetect->handle, "alt_detect_init");
     err |= lib_detect_load_sym((void **)(&libdetect->alt_detect_uninit), libdetect->handle, "alt_detect_uninit");
     err |= lib_detect_load_sym((void **)(&libdetect->alt_detect_process_yuv420), libdetect->handle, "alt_detect_process_yuv420");
-    err |= lib_detect_load_sym((void **)(&libdetect->alt_detect_queue_empty), libdetect->handle, "alt_detect_queue_empty");
     err |= lib_detect_load_sym((void **)(&libdetect->alt_detect_result_ready), libdetect->handle, "alt_detect_result_ready");
     err |= lib_detect_load_sym((void **)(&libdetect->alt_detect_get_result), libdetect->handle, "alt_detect_get_result");
     err |= lib_detect_load_sym((void **)(&libdetect->alt_detect_free_result), libdetect->handle, "alt_detect_free_result");
@@ -112,23 +130,20 @@ static inline void clip_pos_to_image_size(int *xpos, int *ypos, int width, int h
 }
 
 
-static void overlay_result_on_image(lib_detect_info *libdetect,
-                                    unsigned char *yuv_image,
+static void overlay_result_on_image(unsigned char *yuv_image,
                                     int width,
                                     int height,
                                     alt_detect_result_t *alt_detect_result)
 {
-    //libdetect->alt_detect_render_save_yuv420(yuv_image, width, height, alt_detect_result, "out.png");
-
     for (int i = 0; i < alt_detect_result->num_objs; i++) {
         alt_detect_obj_t *cur_obj = &alt_detect_result->objs[i];
         printf("Object %d score: %f\n", i+1, cur_obj->score);
         for (int j = 0; j < cur_obj->num_lines; j++) {
             alt_detect_line_t *cur_line = &cur_obj->lines[j];
 
-            printf("\t%2d:(%d, %d) --- %2d:(%d, %d)\n",
-                   cur_line->p[0].id, cur_line->p[0].x, cur_line->p[0].y,
-                   cur_line->p[1].id, cur_line->p[1].x, cur_line->p[1].y);
+            //printf("\t%2d:(%d, %d) --- %2d:(%d, %d)\n",
+            //       cur_line->p[0].id, cur_line->p[0].x, cur_line->p[0].y,
+            //       cur_line->p[1].id, cur_line->p[1].x, cur_line->p[1].y);
 
             // colour
             unsigned char colour_y = 0;
@@ -197,20 +212,18 @@ static void overlay_result_on_image(lib_detect_info *libdetect,
             }
         }
     }
-
-    libdetect->alt_detect_save_yuv420(yuv_image, width, height, "out.png");
 }
 
 
 static void syntax(const char *progname)
 {
     fprintf(stderr, "Usage:\n");
-    fprintf(stderr, "%s [options]\n", progname);
+    fprintf(stderr, "%s [options] image1.jpg [image2.jpg] ...\n", progname);
     fprintf(stderr, "\n");
     fprintf(stderr, "options:\n");
     fprintf(stderr, " -l [libpath]          Detection library path\n");
     fprintf(stderr, " -c [configfile]       Detection library configuration file\n");
-    fprintf(stderr, " -i [imagepath]        Input JPEG image path\n");
+    fprintf(stderr, " -s [score]            Score threshold\n");
     fprintf(stderr, " -h                    Display this help page\n");
     fprintf(stderr, "\n");
     fprintf(stderr, "Detection Library config keys:\n");
@@ -224,19 +237,26 @@ static void syntax(const char *progname)
 
 int main(int argc, char *argv[])
 {
+    const char *output_file_prefix = "out_";
+    const char *output_file_suffix = ".png";
+    float score_threshold = 200;
     struct stat st;
     lib_detect_info libdetect;
     const char *progname = "";
     const char *alt_detect_lib_path = NULL;
     const char *config_file = NULL;
-    const char *input_jpeg_file = NULL;
     int opt;
     int ret = 0;
+    int i;
+    image_t *images = NULL;
+    int num_images = 0;
+    alt_detect_result_t alt_detect_result;
 
     progname = argv[0];
     memset(&libdetect, 0, sizeof(libdetect));
+    memset(&alt_detect_result, 0, sizeof(alt_detect_result));
 
-    while (((opt = getopt(argc, argv, "l:c:i:h")) != -1))
+    while (((opt = getopt(argc, argv, "l:c:s:h")) != -1))
     {
         switch (opt)
         {
@@ -246,8 +266,8 @@ int main(int argc, char *argv[])
             case 'c':
                 config_file = optarg;
                 break;
-            case 'i':
-                input_jpeg_file = optarg;
+            case 's':
+                score_threshold = atof(optarg);
                 break;
             case 'h': // fall through
             default:
@@ -256,81 +276,108 @@ int main(int argc, char *argv[])
         }
     }
 
-    // too many arguments given
-    if (optind < argc) {
-        fprintf(stderr, "Error: Too many arguments given\n");
+    // too few arguments given
+    if (optind >= argc) {
+        fprintf(stderr, "Error: Too few arguments given\n");
         exit(EXIT_FAILURE);
+    }
+
+    num_images = argc - optind;
+    images = malloc(num_images * sizeof(image_t));
+    if (!images) {
+        fprintf(stderr, "Error: failed to allocate memory for input images\n");
+        exit(EXIT_FAILURE);
+    }
+    memset(images, 0, sizeof(image_t) * num_images);
+    for (i = 0; i < num_images; i++) {
+        images[i].input_jpeg_file = argv[optind + i];
+        images[i].id = num_images-i-1;
+        images[i].output_file = malloc(strlen(images[i].input_jpeg_file) +
+                                       strlen(output_file_prefix) +
+                                       strlen(output_file_suffix) + 1);
+        if (!images[i].output_file) {
+            fprintf(stderr, "Error: failed to allocate memory for input images\n");
+            ret = -1;
+            goto clean_up;
+        }
+        strcpy(images[i].output_file, output_file_prefix);
+        strcpy(images[i].output_file + strlen(output_file_prefix), images[i].input_jpeg_file);
+        strcpy(images[i].output_file + strlen(output_file_prefix) + strlen(images[i].input_jpeg_file), output_file_suffix);
+        gettimeofday(&images[i].timestamp, NULL);
+    }
+    for (i = 0; i < num_images; i++) {
+        if (stat(images[i].input_jpeg_file, &st) != 0)
+        {
+            fprintf(stderr, "Error: %s does not exist\n", images[i].input_jpeg_file);
+            ret = -1;
+            goto clean_up;
+        }
     }
 
     if (!alt_detect_lib_path)
     {
         fprintf(stderr, "Error: detection library not defined\n");
-        exit(EXIT_FAILURE);
-    }
-
-    if (!input_jpeg_file)
-    {
-        fprintf(stderr, "Error: input JPEG file not specified\n");
-        exit(EXIT_FAILURE);
-    }
-    if (stat(input_jpeg_file, &st) != 0)
-    {
-        fprintf(stderr, "Error: %s does not exist\n", input_jpeg_file);
-        exit(EXIT_FAILURE);
+        ret = -1;
+        goto clean_up;
     }
 
     if (!config_file)
     {
         fprintf(stderr, "Error: detection library config file not specified\n");
-        exit(EXIT_FAILURE);
+        ret = -1;
+        goto clean_up;
     }
     if (stat(config_file, &st) != 0)
     {
         fprintf(stderr, "Error: %s does not exist\n", config_file);
-        exit(EXIT_FAILURE);
-    }
-
-
-    //unsigned char *output_buffer = NULL;
-    //unsigned char *yuv_image = NULL;
-    //int width = 640;
-    //int height = 480;
-    //yuv_image = malloc(width*height+width*height/2);
-    //int fd = open(input_jpeg_file, O_RDONLY);
-    //read(fd,yuv_image,width*height+width*height/2);
-    //close(fd);
-
-    alt_detect_result_t alt_detect_result;
-    memset(&alt_detect_result, 0, sizeof(alt_detect_result));
-
-    unsigned char *output_buffer = NULL;
-    int width = 0;
-    int height = 0;
-    int output_num_channels = 0;
-    unsigned char *yuv_image = NULL;
-    if (!read_JPEG_file(input_jpeg_file, &output_buffer, &width, &height, &output_num_channels))
-    {
-        fprintf(stderr, "Error: failed to decompress JPEG file %s\n", input_jpeg_file);
-        exit(EXIT_FAILURE);
-    }
-    printf("width: %d\n", width);
-    printf("height: %d\n", height);
-    printf("output_num_channels: %d\n", output_num_channels);
-    height &= (~3);
-    printf("adjusted height: %d\n", height);
-    yuv_image = rgb2yuv(output_buffer, width, height, output_num_channels);
-    if (!yuv_image)
-    {
         ret = -1;
         goto clean_up;
     }
+
+
+    printf("Score: %f\n", score_threshold);
+    printf("\n");
+
+
+    for (i = 0; i < num_images; i++) {
+        int output_num_channels = 0;
+        printf("Image %d: %s\n", i, images[i].input_jpeg_file);
+        if (!read_JPEG_file(images[i].input_jpeg_file, &images[i].output_buffer,
+                            &images[i].width, &images[i].height, &output_num_channels))
+        {
+            fprintf(stderr, "Error: failed to decompress JPEG file %s\n", images[i].input_jpeg_file);
+            ret = -1;
+            goto clean_up;
+        }
+
+        printf("\tresolution: %d x %d\n", images[i].width, images[i].height);
+        int new_height = images[i].height & (~3);
+        //int new_width  = images[i].width  & (~3);
+        int new_width  = images[i].width;
+        if ((new_height != images[i].height) || (new_width != images[i].width)) {
+            images[i].height = new_height;
+            images[i].width  = new_width;
+            printf("\tadjusted resolution to: %d x %d\n", images[i].width, images[i].height);
+        }
+        printf("\toutput_num_channels: %d\n", output_num_channels);
+
+        images[i].yuv_image = rgb2yuv(images[i].output_buffer, images[i].width,
+                                      images[i].height, output_num_channels);
+        if (!images[i].yuv_image)
+        {
+            fprintf(stderr, "Error: failed to convert %s from RGB to YUV\n", images[i].input_jpeg_file);
+            ret = -1;
+            goto clean_up;
+        }
+    }
+
+
 
     if (lib_detect_load(&libdetect, alt_detect_lib_path))
     {
         ret = -1;
         goto clean_up;
     }
-
     printf("Loaded detection library\n");
     if (libdetect.alt_detect_init(config_file))
     {
@@ -340,49 +387,70 @@ int main(int argc, char *argv[])
         goto clean_up;
     }
 
-    if (libdetect.alt_detect_queue_empty())
+    printf("\n");
+
+    int done = 0;
+    while (!done)
     {
-        printf("process image\n");
-        if (libdetect.alt_detect_process_yuv420(yuv_image, width, height))
-        {
-            const char *errmsg = libdetect.alt_detect_err_msg();
-            fprintf(stderr, "Error: %s\n", errmsg);
-            ret = -1;
-        }
-        else
-        {
-            printf("wait for result ...\n");
-            while (!libdetect.alt_detect_result_ready()) {
-                sleep(1);
-                printf("wait for result ...\n");
+        for (i = 0; i < num_images; i++) {
+            if (images[i].state == STATE_NOT_PROCESSED) {
+                if (libdetect.alt_detect_process_yuv420(images[i].id,
+                                                        &images[i].timestamp,
+                                                        images[i].yuv_image,
+                                                        images[i].width,
+                                                        images[i].height) == 0) {
+                    printf("process image %s\n", images[i].input_jpeg_file);
+                    images[i].state = STATE_PROCESSING;
+                }
             }
-            printf("result ready\n");
-
-            printf("get result\n");
-            if (libdetect.alt_detect_get_result(0, width, height, &alt_detect_result) < 0)
-            {
-                const char *errmsg = libdetect.alt_detect_err_msg();
-                fprintf(stderr, "Error: %s\n", errmsg);
+            if (libdetect.alt_detect_result_ready(images[i].id)) {
+                printf("get results %s\n", images[i].input_jpeg_file);
+                if (libdetect.alt_detect_get_result(images[i].id,
+                                                    score_threshold,
+                                                    &alt_detect_result) >= 0) {
+                    printf("overlay result on image %s, ID %d, timestamp %ld.%06ld\n",
+                           images[i].output_file,
+                           images[i].id,
+                           alt_detect_result.timestamp.tv_sec,
+                           alt_detect_result.timestamp.tv_usec);
+                    overlay_result_on_image(images[i].yuv_image, images[i].width,
+                                            images[i].height, &alt_detect_result);
+                    libdetect.alt_detect_save_yuv420(images[i].yuv_image,
+                                                     images[i].width,
+                                                     images[i].height, images[i].output_file);
+                    images[i].state = STATE_DONE;
+                }
             }
-
-            // overlay result on image
-            printf("overlay result on image\n");
-            overlay_result_on_image(&libdetect, yuv_image, width, height, &alt_detect_result);
-
-            printf("free result\n");
-            libdetect.alt_detect_free_result(&alt_detect_result);
         }
+
+        done = 1;
+        for (i = 0; i < num_images; i++) {
+            if (images[i].state != STATE_DONE) {
+                done = 0;
+                break;
+            }
+        }
+
+        if (!done)
+            usleep(100*1000);
     }
-    else
-        printf("Queue is not empty, skipping detection\n");
 
-    libdetect.alt_detect_uninit();
 
 clean_up:
+    printf("free result\n");
+    libdetect.alt_detect_free_result(&alt_detect_result);
+    libdetect.alt_detect_uninit();
     lib_detect_unload(&libdetect);
-    if (output_buffer)
-        free(output_buffer);
-    if (yuv_image)
-        free(yuv_image);
+    if (images) {
+        for (i = 0; i < num_images; i++) {
+            if (images[i].output_buffer)
+                free(images[i].output_buffer);
+            if (images[i].yuv_image)
+                free(images[i].yuv_image);
+            if (images[i].output_file)
+                free(images[i].output_file);
+        }
+        free(images);
+    }
     exit(ret);
 }
