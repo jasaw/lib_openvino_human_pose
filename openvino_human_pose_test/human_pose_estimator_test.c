@@ -116,17 +116,12 @@ static void lib_detect_unload(lib_detect_info *libdetect)
 }
 
 
-static inline void clip_pos_to_image_size(int *xpos, int *ypos, int width, int height)
+static inline int alg_point_within_range(int *xpos, int *ypos, int width, int height)
 {
-    if (*xpos < 0)
-        *xpos = 0;
-    else if (*xpos > width - 1)
-        *xpos = width - 1;
-
-    if (*ypos < 0)
-        *ypos = 0;
-    else if (*ypos > height - 1)
-        *ypos = height - 1;
+    if ((*xpos < 0) || (*xpos > width - 1) ||
+        (*ypos < 0) || (*ypos > height - 1))
+        return 0;
+    return 1;
 }
 
 
@@ -197,15 +192,16 @@ static void overlay_result_on_image(unsigned char *yuv_image,
                     int Yx_pos = (int)dx;
                     int Yy_pos = (int)dy;
                     int Yindex = Yy_pos*width+Yx_pos;
-                    clip_pos_to_image_size(&Yx_pos, &Yy_pos, width, height);
-                    int UVx_pos = Yx_pos >> 1;
-                    int UVy_pos = Yy_pos >> 1;
-                    int UVindex = UVy_pos*(width>>1)+UVx_pos;
-                    //printf("dx: %f, dy: %f\n", dx, dy);
-                    //Y[Yindex] = ~Y[Yindex];
-                    Y[Yindex]  = colour_y;
-                    U[UVindex] = colour_u;
-                    V[UVindex] = colour_v;
+                    if (alg_point_within_range(&Yx_pos, &Yy_pos, width, height)) {
+                        int UVx_pos = Yx_pos >> 1;
+                        int UVy_pos = Yy_pos >> 1;
+                        int UVindex = UVy_pos*(width>>1)+UVx_pos;
+                        //printf("dx: %f, dy: %f\n", dx, dy);
+                        //Y[Yindex] = ~Y[Yindex];
+                        Y[Yindex]  = colour_y;
+                        U[UVindex] = colour_u;
+                        V[UVindex] = colour_v;
+                    }
                     dx += x_step;
                     dy += y_step;
                 }
