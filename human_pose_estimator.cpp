@@ -109,7 +109,7 @@ HumanPoseEstimator::HumanPoseEstimator(bool matchJobIdToWorkerId_,
                                        const std::string& targetDeviceName)
     : minJointsNumber(3),
       stride(8),
-      meanPixel(cv::Vec3f::all(255)),
+      meanPixel(cv::Vec3f::all(128)),
       minPeaksDistance(3.0f),
       midPointsScoreThreshold(0.05f),
       foundMidPointsRatioThreshold(0.8f),
