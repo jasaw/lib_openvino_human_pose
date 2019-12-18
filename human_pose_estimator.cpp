@@ -122,6 +122,9 @@ HumanPoseEstimator::HumanPoseEstimator(bool matchJobIdToWorkerId_,
     matchJobIdToWorkerId = matchJobIdToWorkerId_;
     numDevices = numDevices_;
 
+    // TODO: set log callback
+    //SetLogCallback();
+
     // get ALL inference devices
     std::vector<std::string> availableDevices = ie.GetAvailableDevices();
     if ((numDevices <= 0) || ((int)availableDevices.size() < numDevices))
@@ -170,6 +173,14 @@ HumanPoseEstimator::HumanPoseEstimator(bool matchJobIdToWorkerId_,
 
 
 HumanPoseEstimator::~HumanPoseEstimator() {
+    // TODO: remove callbacks
+    // SetCompletionCallback
+    for (auto& worker : this->workers) {
+        for (int j = 0; j < worker->queue_size; j++) {
+            worker->infwork[j].first->SetCompletionCallback([]{});
+        }
+    }
+    // SetLogCallback
 }
 
 
